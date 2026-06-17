@@ -88,12 +88,30 @@ node scripts/build-data.js 202509   # 版(YYYYMM)を指定して生成
 
 ## デプロイ（Cloudflare Pages）
 
-ビルド不要のため、このディレクトリをそのまま公開できます。
+ビルド不要の静的サイトなので、このディレクトリをそのまま公開できます。
 
-- ビルドコマンド: なし
+- ビルドコマンド: **なし**
 - 出力ディレクトリ: `/`（ルート）
 
-GitリポジトリをCloudflare Pagesに接続するか、`wrangler pages deploy .` で公開できます。
+### 方法A: Git連携（GitHub → Cloudflare Pages・推奨）
+
+1. GitHubにリポジトリを作成して push
+
+   ```bash
+   gh repo create nagoya-social-map --public --source=. --remote=origin --push
+   ```
+
+2. [Cloudflare Pages](https://dash.cloudflare.com/) →「Pagesプロジェクトを作成」→
+   GitHubの `nagoya-social-map` を選択。ビルド設定は上記（ビルドコマンドなし／出力 `/`）。
+3. 以降は `main` に push するたびに自動デプロイされます。
+
+### 方法B: Wrangler CLIで直接アップロード（GitHub不要）
+
+```bash
+npx wrangler pages deploy . --project-name nagoya-social-map
+```
+
+初回は Cloudflare へのログイン（ブラウザ認証）が求められます。
 
 ---
 

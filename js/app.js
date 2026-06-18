@@ -20,11 +20,17 @@
     NAGOYA_CENTER,
     DEFAULT_ZOOM
   );
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  }).addTo(map);
+  // CARTO Voyager: 無料・APIキー不要で明るく見やすいベースマップ（Retina対応）
+  L.tileLayer(
+    "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+    {
+      maxZoom: 20,
+      detectRetina: true,
+      subdomains: "abcd",
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    }
+  ).addTo(map);
 
   // 件数が多いためマーカーをクラスタリングして表示する
   const clusterGroup = L.markerClusterGroup({

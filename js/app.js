@@ -1,47 +1,26 @@
-// 名古屋市 障がい福祉社会資源マップ - メインロジック
+// 名古屋市 障がい福祉社会資源マップ - メインロジック（Google Maps版）
 (function () {
   "use strict";
 
-  const NAGOYA_CENTER = [35.1607, 136.9099]; // 名古屋市中心付近
+  const NAGOYA_CENTER = { lat: 35.1607, lng: 136.9099 }; // 名古屋市中心付近
   const DEFAULT_ZOOM = 12;
+  const LIST_LIMIT = 300; // 一覧に描画する最大件数（地図には全件表示）
+
+  let map = null;
+  let clusterer = null;
+  let infoWindow = null;
+  let mapReady = false;
+  let markersBuilt = false;
 
   // 状態
   const state = {
     facilities: [],
-    markers: new Map(), // id -> Leaflet marker
-    activeCategories: new Set(), // 表示中のカテゴリ
+    markers: new Map(), // id -> google.maps.Marker
+    activeCategories: new Set(),
     ward: "",
     query: "",
     activeId: null,
   };
-
-  // ----- 地図初期化 -----
-  const map = L.map("map", { zoomControl: true }).setView(
-    NAGOYA_CENTER,
-    DEFAULT_ZOOM
-  );
-  // CARTO Voyager: 無料・APIキー不要で明るく見やすいベースマップ（Retina対応）
-  L.tileLayer(
-    "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-    {
-      maxZoom: 20,
-      detectRetina: true,
-      subdomains: "abcd",
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    }
-  ).addTo(map);
-
-  // 件数が多いためマーカーをクラスタリングして表示する
-  const clusterGroup = L.markerClusterGroup({
-    showCoverageOnHover: false,
-    maxClusterRadius: 50,
-    spiderfyOnMaxZoom: true,
-    chunkedLoading: true,
-  });
-  map.addLayer(clusterGroup);
-
-  const LIST_LIMIT = 300; // 一覧に描画する最大件数（地図には全件表示）
 
   // ----- DOM参照 -----
   const els = {
@@ -54,6 +33,31 @@
     uncheckAll: document.getElementById("uncheck-all"),
     sidebar: document.getElementById("sidebar"),
     toggleSidebar: document.getElementById("toggle-sidebar"),
+    map: document.getElementById("map"),
+  };
+
+  // ===== Google Maps 初期化（APIのcallbackから呼ばれる）=====
+  window.initMap = function () {
+    map = new google.maps.Map(els.map, {
+      center: NAGOYA_CENTER,
+      zoom: DEFAULT_ZOOM,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: true,
+      gestureHandling: "greedy",
+    });
+    infoWindow = new google.maps.InfoWindow({ maxWidth: 320 });
+    clusterer = new markerClusterer.MarkerClusterer({ map, markers: [] });
+    mapReady = true;
+    maybeBuildMarkers();
+  };
+
+  // キー不正・課金未設定など読み込み失敗時の案内
+  window.gm_authFailure = function () {
+    els.map.innerHTML =
+      '<div style="padding:24px;font-size:.9rem;color:#b91c1c;line-height:1.7">' +
+      "地図を読み込めませんでした。<br>Google Maps APIキーの制限（ウェブサイト/HTTPリファラー）や" +
+      "請求設定をご確認ください。</div>";
   };
 
   // ----- カテゴリ絞り込みUIを生成 -----
@@ -110,24 +114,49 @@
   }
 
   // ----- マーカー生成 -----
+  function markerIcon(f, color) {
+    if (f.approx) {
+      // 位置不確実: 白抜き・色枠
+      return {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 6,
+        fillColor: "#ffffff",
+        fillOpacity: 0.95,
+        strokeColor: color,
+        strokeWeight: 2,
+      };
+    }
+    return {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 6,
+      fillColor: color,
+      fillOpacity: 1,
+      strokeColor: "#ffffff",
+      strokeWeight: 1.5,
+    };
+  }
+
   function makeMarker(f) {
     const color = window.CATEGORY_COLOR[f.category] || "#64748b";
-    // approx(位置不確実)は白抜き・半透明で区別する
-    const pinClass = f.approx ? "marker-pin marker-pin--approx" : "marker-pin";
-    const pinStyle = f.approx
-      ? "border-color:" + color + ";color:" + color
-      : "background:" + color;
-    const icon = L.divIcon({
-      className: "",
-      html: '<div class="' + pinClass + '" style="' + pinStyle + '"></div>',
-      iconSize: [18, 18],
-      iconAnchor: [9, 18],
-      popupAnchor: [0, -16],
+    const marker = new google.maps.Marker({
+      position: { lat: f.lat, lng: f.lng },
+      icon: markerIcon(f, color),
+      title: f.name,
     });
-    const marker = L.marker([f.lat, f.lng], { icon });
-    marker.bindPopup(popupHtml(f));
-    marker.on("click", () => setActive(f.id, false));
+    marker.facilityId = f.id;
+    marker.addListener("click", () => {
+      openInfo(f);
+      highlightList(f.id);
+    });
     return marker;
+  }
+
+  function openInfo(f) {
+    // 位置指定でInfoWindowを開く（クラスタ内マーカーでも確実に表示される）
+    infoWindow.setContent(popupHtml(f));
+    infoWindow.setPosition({ lat: f.lat, lng: f.lng });
+    infoWindow.open(map);
+    state.activeId = f.id;
   }
 
   function popupHtml(f) {
@@ -205,13 +234,15 @@
     const list = filtered();
 
     // 地図マーカー（クラスタ）を再構築
-    const visibleMarkers = [];
-    list.forEach((f) => {
-      const m = state.markers.get(f.id);
-      if (m) visibleMarkers.push(m);
-    });
-    clusterGroup.clearLayers();
-    clusterGroup.addLayers(visibleMarkers);
+    if (mapReady && markersBuilt) {
+      const visibleMarkers = [];
+      list.forEach((f) => {
+        const m = state.markers.get(f.id);
+        if (m) visibleMarkers.push(m);
+      });
+      clusterer.clearMarkers();
+      clusterer.addMarkers(visibleMarkers);
+    }
 
     // 一覧（多すぎると重いので上限まで描画。地図には全件表示される）
     els.count.textContent = list.length;
@@ -260,25 +291,28 @@
     }
   }
 
-  // ----- アクティブ選択（一覧↔地図の連動）-----
-  function setActive(id, panTo) {
+  function highlightList(id) {
     state.activeId = id;
-    const f = state.facilities.find((x) => x.id === id);
-    const marker = state.markers.get(id);
-    if (f && marker) {
-      if (panTo) {
-        // クラスタ内のマーカーでも見えるようズームしてからポップアップを開く
-        clusterGroup.zoomToShowLayer(marker, () => marker.openPopup());
-      } else {
-        marker.openPopup();
-      }
-    }
-    // 一覧のハイライト更新
     els.list.querySelectorAll(".facility-item").forEach((li) => {
       li.classList.toggle("active", li.dataset.id === id);
     });
-    const activeLi = els.list.querySelector('.facility-item[data-id="' + id + '"]');
+    const activeLi = els.list.querySelector(
+      '.facility-item[data-id="' + id + '"]'
+    );
     if (activeLi) activeLi.scrollIntoView({ block: "nearest" });
+  }
+
+  // ----- アクティブ選択（一覧→地図の連動）-----
+  function setActive(id, panTo) {
+    const f = state.facilities.find((x) => x.id === id);
+    if (f && map) {
+      if (panTo) {
+        map.panTo({ lat: f.lat, lng: f.lng });
+        if (map.getZoom() < 16) map.setZoom(16);
+      }
+      openInfo(f);
+    }
+    highlightList(id);
     // モバイルでは地図を見せるためサイドバーを閉じる
     if (panTo && window.matchMedia("(max-width: 760px)").matches) {
       els.sidebar.classList.remove("open");
@@ -302,6 +336,14 @@
     });
   }
 
+  // 地図とデータが両方そろったらマーカーを生成する
+  function maybeBuildMarkers() {
+    if (!mapReady || markersBuilt || !state.facilities.length) return;
+    state.facilities.forEach((f) => state.markers.set(f.id, makeMarker(f)));
+    markersBuilt = true;
+    render();
+  }
+
   // ----- データ読み込み -----
   function load() {
     buildCategoryFilters();
@@ -315,8 +357,8 @@
       })
       .then((data) => {
         state.facilities = data;
-        data.forEach((f) => state.markers.set(f.id, makeMarker(f)));
-        render();
+        render(); // 一覧は地図前でも表示
+        maybeBuildMarkers();
       })
       .catch((err) => {
         els.list.innerHTML =

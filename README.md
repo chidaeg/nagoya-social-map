@@ -13,7 +13,8 @@
 
 ## 技術構成
 
-- 地図: **Leaflet + OpenStreetMap**（無料・APIキー不要）
+- 地図: **Google Maps JavaScript API**（ブラウザ用APIキーをHTTPリファラー制限で使用）
+  - マーカークラスタリング: `@googlemaps/markerclusterer`
 - フロント: 素のHTML / CSS / JavaScript（ビルド不要）
 - データ: `data/facilities.json`（事業所一覧）/ `data/categories.js`（カテゴリ・区の定義）
 - ホスティング想定: **Cloudflare Pages**（静的サイトをそのまま公開可能）

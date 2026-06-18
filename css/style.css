@@ -295,11 +295,22 @@ body {
 
 .popup__targets {
   margin-top: 5px;
+  font-size: 0.8rem;
+}
+
+.popup__targets b {
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-right: 4px;
 }
 
 .popup__targets .tag {
   background: #0ea5e9;
   margin-right: 3px;
+}
+
+.popup__targets .tag--feature {
+  background: #16a34a;
 }
 
 /* ---------- Custom marker ---------- */

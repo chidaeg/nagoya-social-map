@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 /**
- * 名古屋市 障がい福祉社会資源マップ - 実データ生成スクリプト
+ * 名古屋市 障がい福祉社会資源マップ - 実データ生成スクリプト（ハイブリッド）
  *
- * WAM NET「障害福祉サービス等情報公表システム」のオープンデータ（都道府県横断・
- * サービス種別別ZIP）をダウンロードし、名古屋市分を抽出して data/facilities.json を生成する。
- * 各CSVには事業所緯度・経度が含まれるため、ジオコーディングは不要。
+ * 主データ : 名古屋市「ウェルネットなごや」障害福祉サービス事業所検索の一覧CSV
+ *            （export_items エンドポイント / サービス種別ごとに取得 / Shift_JIS）
+ *            → 最新・名古屋市独自事業(移動支援/地域活動支援)・対象者情報を含む。座標は無し。
+ * 座標     : WAM NET オープンデータ(全国CSV・緯度経度付き)を事業所番号で突き合わせて補完。
+ *            突き合わない分のみ 国土地理院ジオコーディングAPI(無料)で住所から付与。
  *
  * 使い方:
- *   node scripts/build-data.js            # 最新版(YYYYMM)で生成
- *   node scripts/build-data.js 202509     # 版を指定
+ *   node scripts/build-data.js
  *
- * 出典: 独立行政法人福祉医療機構 WAM NET
- *   https://www.wam.go.jp/content/wamnet/pcpub/top/sfkopendata/
+ * キャッシュ:
+ *   scripts/.cache/wel/      … ウェルネットの種別別CSV
+ *   scripts/.cache/<WAM版>/  … WAMの種別別ZIP/CSV
+ *   scripts/.cache/geocode.json … ジオコーディング結果（住所→座標）
+ *
+ * 出典: 名古屋市 介護・障害情報提供システム（ウェルネットなごや） /
+ *       独立行政法人福祉医療機構 WAM NET / 国土地理院 地理院地図ジオコーディング
  */
 "use strict";
 
@@ -19,83 +25,127 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const { execSync } = require("child_process");
-const os = require("os");
 
-const VERSION = process.argv[2] || "202603"; // 既定: 2026年3月末版
-const BASE = `https://www.wam.go.jp/content/files/pcpub/top/sfkopendata/${VERSION}`;
-const CACHE_DIR = path.join(__dirname, ".cache", VERSION);
+const WAM_VERSION = "202603"; // 座標補完に使うWAM版
+const WEL_EXPORT =
+  "https://www.kaigo-wel.city.nagoya.jp/view/wel/jigyosho/export_items";
+const WAM_BASE = `https://www.wam.go.jp/content/files/pcpub/top/sfkopendata/${WAM_VERSION}`;
+const GSI_API = "https://msearch.gsi.go.jp/address-search/AddressSearch";
+
+const CACHE = path.join(__dirname, ".cache");
+const WEL_CACHE = path.join(CACHE, "wel");
+const WAM_CACHE = path.join(CACHE, WAM_VERSION);
+const GEOCODE_CACHE = path.join(CACHE, "geocode.json");
 const OUT = path.join(__dirname, "..", "data", "facilities.json");
 
-// WAMサービス種別番号 -> 当サイトの表示カテゴリ名
-// （categories.js のカテゴリと一致させること）
-const SERVICE_MAP = {
-  11: "居宅介護",
-  12: "重度訪問介護",
-  15: "同行援護",
-  13: "行動援護",
-  14: "重度障害者等包括支援",
-  22: "生活介護",
-  24: "短期入所",
-  21: "療養介護",
-  45: "就労継続支援A型",
-  46: "就労継続支援B型",
-  60: "就労移行支援",
-  62: "就労定着支援",
-  41: "自立訓練（機能訓練）",
-  42: "自立訓練（生活訓練）",
-  63: "児童発達支援",
-  64: "医療型児童発達支援",
-  65: "放課後等デイサービス",
-  66: "居宅訪問型児童発達支援",
-  67: "保育所等訪問支援",
-  33: "共同生活援助（グループホーム）",
-  32: "施設入所支援",
-  34: "宿泊型自立訓練",
-  61: "自立生活援助",
-  68: "福祉型障害児入所施設",
-  69: "医療型障害児入所施設",
-  52: "計画相談支援",
-  53: "地域移行支援",
-  54: "地域定着支援",
-  70: "障害児相談支援",
+// ウェルネットの種別番号(kind) -> 当サイトの表示カテゴリ。
+// 基準該当/共生型は基本カテゴリへ集約。市独自事業(移動支援/地域活動支援)も含む。
+const KIND_CATEGORY = {
+  54: "計画相談支援",
+  55: "障害児相談支援",
+  56: "地域移行支援",
+  57: "地域定着支援",
+  58: "居宅介護",
+  59: "重度訪問介護",
+  60: "行動援護",
+  61: "同行援護",
+  62: "移動支援",
+  84: "重度障害者等包括支援",
+  92: "就労定着支援",
+  93: "自立生活援助",
+  94: "居宅介護",        // 基準該当
+  95: "重度訪問介護",    // 基準該当
+  96: "居宅介護",        // 共生型
+  97: "重度訪問介護",    // 共生型
+  64: "生活介護",
+  65: "自立訓練（機能訓練）",
+  66: "自立訓練（生活訓練）",
+  67: "就労移行支援",    // 一般型
+  107: "就労選択支援",
+  68: "就労移行支援",    // 資格取得型
+  69: "就労継続支援A型",
+  70: "就労継続支援B型",
+  71: "療養介護",
+  72: "地域活動支援",
+  74: "医療型児童発達支援",
+  73: "児童発達支援",
+  98: "居宅訪問型児童発達支援",
+  76: "保育所等訪問支援",
+  75: "放課後等デイサービス",
+  89: "生活介護",        // 基準該当
+  90: "自立訓練（機能訓練）", // 基準該当
+  91: "自立訓練（生活訓練）", // 基準該当
+  87: "児童発達支援",    // 基準該当
+  88: "放課後等デイサービス", // 基準該当
+  99: "生活介護",        // 共生型
+  100: "自立訓練（機能訓練）", // 共生型
+  101: "自立訓練（生活訓練）", // 共生型
+  102: "児童発達支援",   // 共生型
+  103: "放課後等デイサービス", // 共生型
+  77: "共同生活援助（グループホーム）",
+  78: "共同生活援助（グループホーム）", // 外部サービス利用型
+  104: "共同生活援助（グループホーム）", // 日中サービス支援型
+  79: "短期入所",
+  80: "宿泊型自立訓練",
+  81: "施設入所支援",
+  82: "福祉型障害児入所施設",
+  83: "医療型障害児入所施設",
+  105: "短期入所",       // 基準該当
+  106: "短期入所",       // 共生型
 };
 
-// ---- HTTPダウンロード ----
-function download(url, dest) {
+// WAM側の座標補完に使う種別ファイル番号（全国CSV）
+const WAM_NUMS = [
+  11, 12, 13, 14, 15, 21, 22, 24, 32, 33, 34, 41, 42, 45, 46, 52, 53, 54,
+  60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70,
+];
+
+const NAGOYA_WARDS = [
+  "千種区", "東区", "北区", "西区", "中村区", "中区",
+  "昭和区", "瑞穂区", "熱田区", "中川区", "港区", "南区",
+  "守山区", "緑区", "名東区", "天白区",
+];
+const WARD_SET = new Set(NAGOYA_WARDS);
+const LAT_RANGE = [35.0, 35.3];
+const LNG_RANGE = [136.78, 137.07];
+
+// ---------- 汎用 ----------
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function httpGet(url, dest) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
+    const file = dest ? fs.createWriteStream(dest) : null;
+    const chunks = [];
     https
-      .get(url, (res) => {
+      .get(url, { headers: { "User-Agent": "nagoya-social-map/1.0" } }, (res) => {
         if (res.statusCode !== 200) {
-          file.close();
-          fs.unlinkSync(dest);
-          return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+          if (file) { file.close(); fs.existsSync(dest) && fs.unlinkSync(dest); }
+          return reject(new Error(`HTTP ${res.statusCode}`));
         }
-        res.pipe(file);
-        file.on("finish", () => file.close(resolve));
+        res.on("data", (d) => { if (file) file.write(d); else chunks.push(d); });
+        res.on("end", () => {
+          if (file) file.end(() => resolve());
+          else resolve(Buffer.concat(chunks).toString("utf8"));
+        });
       })
       .on("error", (err) => {
-        file.close();
-        if (fs.existsSync(dest)) fs.unlinkSync(dest);
+        if (file) { file.close(); fs.existsSync(dest) && fs.unlinkSync(dest); }
         reject(err);
       });
   });
 }
 
-// ---- CSVパーサ（クォート・改行・エスケープ対応）----
 function parseCsv(text) {
   text = text.replace(/^﻿/, "");
   const rows = [];
-  let row = [];
-  let cur = "";
-  let q = false;
+  let row = [], cur = "", q = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (q) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { cur += '"'; i++; }
-        else q = false;
-      } else cur += c;
+      if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += c;
     } else {
       if (c === '"') q = true;
       else if (c === ",") { row.push(cur); cur = ""; }
@@ -108,128 +158,186 @@ function parseCsv(text) {
   return rows;
 }
 
-const NAGOYA_WARDS = [
-  "千種区", "東区", "北区", "西区", "中村区", "中区",
-  "昭和区", "瑞穂区", "熱田区", "中川区", "港区", "南区",
-  "守山区", "緑区", "名東区", "天白区",
-];
-
-const WARD_SET = new Set(NAGOYA_WARDS);
-function extractWard(cityField, addrField) {
-  const hay = (cityField || "") + " " + (addrField || "");
-  // 「名古屋市」直後〜最初の「区」までを区名として取り出す。
-  // 単純な includes だと「東区」が「名東区」に含まれて誤判定するため正規表現で抽出する。
-  const m = hay.match(/名古屋市([^\s0-9０-９]{1,3}区)/);
+function extractWard(addr) {
+  const m = (addr || "").match(/名古屋市([^\s0-9０-９]{1,3}区)/);
   if (m && WARD_SET.has(m[1])) return m[1];
   return "";
 }
 
+function inNagoya(lat, lng) {
+  return (
+    lat >= LAT_RANGE[0] && lat <= LAT_RANGE[1] &&
+    lng >= LNG_RANGE[0] && lng <= LNG_RANGE[1]
+  );
+}
+
+// ---------- WAM: 事業所番号 -> 座標 ----------
+async function buildWamCoordMap() {
+  fs.mkdirSync(WAM_CACHE, { recursive: true });
+  const coord = new Map();
+  for (const num of WAM_NUMS) {
+    const zip = path.join(WAM_CACHE, `sfkopendata_${WAM_VERSION}_${num}.zip`);
+    const csv = path.join(WAM_CACHE, `csvdownload0${num}.csv`);
+    if (!fs.existsSync(zip) && !fs.existsSync(csv)) {
+      try {
+        await httpGet(`${WAM_BASE}/sfkopendata_${WAM_VERSION}_${num}.zip`, zip);
+      } catch (e) { continue; }
+    }
+    if (!fs.existsSync(csv) && fs.existsSync(zip)) {
+      try { execSync(`unzip -o -q "${zip}" -d "${WAM_CACHE}"`); } catch (e) { continue; }
+    }
+    if (!fs.existsSync(csv)) continue;
+    const rows = parseCsv(fs.readFileSync(csv, "utf8"));
+    const H = rows[0];
+    const cNo = H.indexOf("事業所番号");
+    const cLat = H.indexOf("事業所緯度");
+    const cLng = H.indexOf("事業所経度");
+    for (let i = 1; i < rows.length; i++) {
+      const no = (rows[i][cNo] || "").trim();
+      const lat = parseFloat(rows[i][cLat]);
+      const lng = parseFloat(rows[i][cLng]);
+      if (!no || !isFinite(lat) || !isFinite(lng) || !inNagoya(lat, lng)) continue;
+      if (!coord.has(no)) coord.set(no, { lat, lng });
+    }
+  }
+  return coord;
+}
+
+// ---------- ウェルネット: 種別ごとにCSV取得 ----------
+async function fetchWelKind(kind) {
+  fs.mkdirSync(WEL_CACHE, { recursive: true });
+  const csv = path.join(WEL_CACHE, `wel_${kind}.csv`);
+  if (!fs.existsSync(csv)) {
+    const bin = path.join(WEL_CACHE, `wel_${kind}.bin`);
+    const url = `${WEL_EXPORT}?kind%5B${kind}%5D=true`;
+    let ok = false;
+    for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+      try { await httpGet(url, bin); ok = true; }
+      catch (e) { await sleep(1500); }
+    }
+    if (!ok) throw new Error(`ウェルネット取得失敗 kind=${kind}`);
+    execSync(`iconv -f CP932 -t UTF-8 "${bin}" > "${csv}"`);
+    fs.unlinkSync(bin);
+    await sleep(400); // 連続アクセスを控えめに
+  }
+  return parseCsv(fs.readFileSync(csv, "utf8"));
+}
+
+// ---------- ジオコーディング（キャッシュ付き） ----------
+let geocodeCache = {};
+let geocodeDirty = 0;
+function loadGeocodeCache() {
+  if (fs.existsSync(GEOCODE_CACHE)) {
+    try { geocodeCache = JSON.parse(fs.readFileSync(GEOCODE_CACHE, "utf8")); } catch (e) {}
+  }
+}
+function saveGeocodeCache() {
+  fs.writeFileSync(GEOCODE_CACHE, JSON.stringify(geocodeCache));
+}
+async function geocode(addr) {
+  if (addr in geocodeCache) return geocodeCache[addr];
+  let result = null;
+  try {
+    const json = await httpGet(`${GSI_API}?q=${encodeURIComponent(addr)}`);
+    const arr = JSON.parse(json);
+    if (Array.isArray(arr) && arr.length && arr[0].geometry) {
+      const [lng, lat] = arr[0].geometry.coordinates;
+      if (inNagoya(lat, lng)) result = { lat, lng };
+    }
+  } catch (e) { /* null */ }
+  geocodeCache[addr] = result;
+  if (++geocodeDirty % 25 === 0) saveGeocodeCache();
+  await sleep(150);
+  return result;
+}
+
+// ---------- メイン ----------
 async function main() {
-  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  loadGeocodeCache();
+  console.log("① WAMの座標テーブルを構築中...");
+  const wamCoord = await buildWamCoordMap();
+  console.log(`   WAM座標: ${wamCoord.size} 事業所`);
+
+  console.log("② ウェルネットの一覧を取得中（種別ごと）...");
   const out = [];
   const seen = new Set();
   const stats = {};
+  let needGeocode = 0, geocoded = 0, dropped = 0;
+  const kinds = Object.keys(KIND_CATEGORY);
 
-  for (const [num, category] of Object.entries(SERVICE_MAP)) {
-    const zipPath = path.join(CACHE_DIR, `sfkopendata_${VERSION}_${num}.zip`);
-    const csvPath = path.join(CACHE_DIR, `csvdownload0${num}.csv`);
-
-    // ダウンロード（キャッシュがあれば再利用）
-    if (!fs.existsSync(zipPath)) {
-      const url = `${BASE}/sfkopendata_${VERSION}_${num}.zip`;
-      process.stdout.write(`↓ ${category} (${num}) ... `);
-      try {
-        await download(url, zipPath);
-        console.log("done");
-      } catch (e) {
-        console.log("SKIP (" + e.message + ")");
-        continue;
-      }
-    }
-
-    // 解凍（CSV名が想定と異なる場合に備えてZIP内の.csvを探す）
-    let csv = csvPath;
-    if (!fs.existsSync(csv)) {
-      try {
-        execSync(`unzip -o -q "${zipPath}" -d "${CACHE_DIR}"`);
-      } catch (e) {
-        console.log(`  ! unzip失敗 ${num}: ${e.message}`);
-        continue;
-      }
-    }
-    if (!fs.existsSync(csv)) {
-      const found = fs
-        .readdirSync(CACHE_DIR)
-        .filter((f) => f.toLowerCase().endsWith(".csv") && f.includes(num));
-      if (found.length) csv = path.join(CACHE_DIR, found[0]);
-      else { console.log(`  ! CSV見つからず ${num}`); continue; }
-    }
-
-    const rows = parseCsv(fs.readFileSync(csv, "utf8"));
+  for (const kind of kinds) {
+    const category = KIND_CATEGORY[kind];
+    let rows;
+    try { rows = await fetchWelKind(kind); }
+    catch (e) { console.log(`   SKIP kind=${kind} (${e.message})`); continue; }
     const H = rows[0];
-    const col = (name) => H.indexOf(name);
-    const cName = col("事業所の名称");
-    const cCity = col("事業所住所（市区町村）");
-    const cAddr = col("事業所住所（番地以降）");
-    const cLat = col("事業所緯度");
-    const cLng = col("事業所経度");
-    const cTel = col("事業所電話番号");
-    const cUrl = col("事業所URL");
-    const cNo = col("事業所番号");
+    const c = (n) => H.indexOf(n);
+    const cName = c("施設・サービス名");
+    const cNo = c("障害福祉サービス等事業所番号");
+    const cCorp = c("法人の名称");
+    const cAddr = c("所在地");
+    const cTel = c("電話番号");
+    const cId = c("ID");
+    const targetCols = ["身体", "知的", "精神", "難病", "障害児"].map((t) => [t, c(t)]);
+    const featCols = ["給食", "入浴", "送迎"].map((t) => [t, c(t)]);
 
-    let count = 0;
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
-      const city = r[cCity] || "";
-      // 「北名古屋市」(別の市) は "名古屋市" を部分文字列に含むため除外する
-      if (!city.includes("名古屋市") || city.includes("北名古屋市")) continue;
-      const ward = extractWard(city, r[cAddr]);
-      const lat = parseFloat(r[cLat]);
-      const lng = parseFloat(r[cLng]);
-      if (!isFinite(lat) || !isFinite(lng) || lat === 0 || lng === 0) continue;
+      const name = (r[cName] || "").trim();
+      if (!name) continue;
+      const addr = (r[cAddr] || "").replace(/^愛知県/, "").trim();
+      const ward = extractWard(r[cAddr]);
+      if (!ward) continue; // 名古屋市16区以外（市外データ等）は除外
 
-      // 同一事業所が同一サービスで重複しないよう事業所番号+種別でユニーク化
-      const bizNo = (r[cNo] || "").trim();
-      const id = (bizNo || `g${num}-${i}`) + "_" + num;
+      const bizNo = (r[cNo] || "").replace(/"/g, "").trim();
+      const id = (bizNo || `wel${r[cId]}`) + "_" + kind;
       if (seen.has(id)) continue;
       seen.add(id);
 
+      // 座標: WAM突き合わせ → 失敗時ジオコーディング
+      let coord = bizNo && wamCoord.get(bizNo);
+      if (!coord) {
+        needGeocode++;
+        coord = await geocode(addr);
+        if (coord) geocoded++;
+      }
+      if (!coord) { dropped++; continue; }
+
+      const target = targetCols.filter(([, idx]) => (r[idx] || "").trim() === "1").map(([t]) => t);
+      const features = featCols.filter(([, idx]) => (r[idx] || "").trim() === "1").map(([t]) => t);
+
       out.push({
         id,
-        name: (r[cName] || "").trim(),
+        name,
         category,
         ward,
-        address: (city + (r[cAddr] || "")).replace(/^愛知県/, ""),
-        lat: Math.round(lat * 1e6) / 1e6,
-        lng: Math.round(lng * 1e6) / 1e6,
+        address: addr,
+        corp: (r[cCorp] || "").trim(),
+        lat: Math.round(coord.lat * 1e6) / 1e6,
+        lng: Math.round(coord.lng * 1e6) / 1e6,
         tel: (r[cTel] || "").trim(),
-        url: (r[cUrl] || "").trim(),
-        target: [],
+        url: "",
+        target,
+        features,
         note: "",
       });
-      count++;
+      stats[category] = (stats[category] || 0) + 1;
     }
-    stats[category] = count;
   }
+  saveGeocodeCache();
 
-  // 名称→区→カテゴリ順で安定ソート
   out.sort(
     (a, b) =>
       a.ward.localeCompare(b.ward, "ja") ||
       a.category.localeCompare(b.category, "ja") ||
       a.name.localeCompare(b.name, "ja")
   );
-
   fs.writeFileSync(OUT, JSON.stringify(out, null, 2) + "\n");
-  console.log("\n=== カテゴリ別件数 ===");
-  Object.entries(stats).forEach(([k, v]) => console.log(`  ${k}: ${v}`));
-  console.log(`\n✅ 合計 ${out.length} 件を ${path.relative(process.cwd(), OUT)} に書き出しました（版: ${VERSION}）`);
 
-  const noWard = out.filter((x) => !x.ward).length;
-  if (noWard) console.log(`⚠️ 区を特定できなかった件数: ${noWard}`);
+  console.log("\n=== カテゴリ別件数 ===");
+  Object.entries(stats).sort().forEach(([k, v]) => console.log(`  ${k}: ${v}`));
+  console.log(`\n座標補完: WAM一致 ${out.length - geocoded} / ジオコーディング ${geocoded}（要求 ${needGeocode}・座標取得失敗で除外 ${dropped}）`);
+  console.log(`✅ 合計 ${out.length} 件を ${path.relative(process.cwd(), OUT)} に書き出しました`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+main().catch((e) => { console.error(e); process.exit(1); });

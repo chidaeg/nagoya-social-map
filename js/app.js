@@ -123,6 +123,12 @@
     const targets = (f.target || [])
       .map((t) => '<span class="tag">' + t + "</span>")
       .join("");
+    const features = (f.features || [])
+      .map((t) => '<span class="tag tag--feature">' + t + "</span>")
+      .join("");
+    const corp = f.corp
+      ? '<div class="popup__row"><b>法人</b> ' + esc(f.corp) + "</div>"
+      : "";
     const tel = f.tel
       ? '<div class="popup__row"><b>TEL</b> <a href="tel:' +
         f.tel +
@@ -146,9 +152,15 @@
       '<div class="popup__row"><b>住所</b> ' +
       esc(f.address) +
       "</div>" +
+      corp +
       tel +
       url +
-      (targets ? '<div class="popup__targets">' + targets + "</div>" : "") +
+      (targets
+        ? '<div class="popup__targets"><b>対象</b> ' + targets + "</div>"
+        : "") +
+      (features
+        ? '<div class="popup__targets"><b>提供</b> ' + features + "</div>"
+        : "") +
       (f.note ? '<div class="popup__row">' + esc(f.note) + "</div>" : "") +
       "</div>"
     );

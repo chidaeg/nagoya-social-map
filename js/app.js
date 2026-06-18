@@ -112,9 +112,14 @@
   // ----- マーカー生成 -----
   function makeMarker(f) {
     const color = window.CATEGORY_COLOR[f.category] || "#64748b";
+    // approx(位置不確実)は白抜き・半透明で区別する
+    const pinClass = f.approx ? "marker-pin marker-pin--approx" : "marker-pin";
+    const pinStyle = f.approx
+      ? "border-color:" + color + ";color:" + color
+      : "background:" + color;
     const icon = L.divIcon({
       className: "",
-      html: '<div class="marker-pin" style="background:' + color + '"></div>',
+      html: '<div class="' + pinClass + '" style="' + pinStyle + '"></div>',
       iconSize: [18, 18],
       iconAnchor: [9, 18],
       popupAnchor: [0, -16],
@@ -166,6 +171,9 @@
         : "") +
       (features
         ? '<div class="popup__targets"><b>提供</b> ' + features + "</div>"
+        : "") +
+      (f.approx
+        ? '<div class="popup__approx">📍 地図上の位置はおおよそです（番地を特定できず周辺を表示）</div>'
         : "") +
       (f.note ? '<div class="popup__row">' + esc(f.note) + "</div>" : "") +
       "</div>"

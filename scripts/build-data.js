@@ -164,6 +164,40 @@ function extractWard(addr) {
   return "";
 }
 
+// 漢数字(十まで対応)を半角数字へ。「三丁目」「十一」等を 3 / 11 に。
+function kanjiToNum(s) {
+  const d = { 〇: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  return s.replace(/[〇一二三四五六七八九十]+/g, (run) => {
+    let total = 0, cur = 0, has = false;
+    for (const ch of run) {
+      if (ch === "十") { cur = cur === 0 ? 1 : cur; total += cur * 10; cur = 0; has = true; }
+      else { cur = d[ch]; has = true; }
+    }
+    total += cur;
+    return has ? String(total) : run;
+  });
+}
+
+// 住所をWAM/ウェルネット間で突き合わせ可能な正規形にする。
+// 県・市を除去 → 建物名(最初の空白以降)を切り落とし → 全角/漢数字を半角に
+// → 丁目/番地/番/号/の を「-」に統一。
+function normAddr(addr) {
+  if (!addr) return "";
+  let s = addr.replace(/^愛知県/, "").replace(/名古屋市/, "");
+  s = s.split(/[\s　]/)[0]; // 建物名・部屋番号を除去
+  s = s.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  s = kanjiToNum(s);
+  s = s
+    .replace(/丁目/g, "-")
+    .replace(/番地|番/g, "-")
+    .replace(/号/g, "")
+    .replace(/の/g, "-")
+    .replace(/[ー‐−–—\-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/-$/, "");
+  return s;
+}
+
 function inNagoya(lat, lng) {
   return (
     lat >= LAT_RANGE[0] && lat <= LAT_RANGE[1] &&
@@ -171,10 +205,11 @@ function inNagoya(lat, lng) {
   );
 }
 
-// ---------- WAM: 事業所番号 -> 座標 ----------
+// ---------- WAM: 事業所番号/住所 -> 座標 ----------
 async function buildWamCoordMap() {
   fs.mkdirSync(WAM_CACHE, { recursive: true });
-  const coord = new Map();
+  const byNo = new Map();
+  const byAddr = new Map();
   for (const num of WAM_NUMS) {
     const zip = path.join(WAM_CACHE, `sfkopendata_${WAM_VERSION}_${num}.zip`);
     const csv = path.join(WAM_CACHE, `csvdownload0${num}.csv`);
@@ -190,17 +225,23 @@ async function buildWamCoordMap() {
     const rows = parseCsv(fs.readFileSync(csv, "utf8"));
     const H = rows[0];
     const cNo = H.indexOf("事業所番号");
+    const cCity = H.indexOf("事業所住所（市区町村）");
+    const cAddr = H.indexOf("事業所住所（番地以降）");
     const cLat = H.indexOf("事業所緯度");
     const cLng = H.indexOf("事業所経度");
     for (let i = 1; i < rows.length; i++) {
-      const no = (rows[i][cNo] || "").trim();
-      const lat = parseFloat(rows[i][cLat]);
-      const lng = parseFloat(rows[i][cLng]);
-      if (!no || !isFinite(lat) || !isFinite(lng) || !inNagoya(lat, lng)) continue;
-      if (!coord.has(no)) coord.set(no, { lat, lng });
+      const r = rows[i];
+      const lat = parseFloat(r[cLat]);
+      const lng = parseFloat(r[cLng]);
+      if (!isFinite(lat) || !isFinite(lng) || !inNagoya(lat, lng)) continue;
+      const coord = { lat, lng };
+      const no = (r[cNo] || "").trim();
+      if (no && !byNo.has(no)) byNo.set(no, coord);
+      const key = normAddr((r[cCity] || "") + (r[cAddr] || ""));
+      if (key && !byAddr.has(key)) byAddr.set(key, coord);
     }
   }
-  return coord;
+  return { byNo, byAddr };
 }
 
 // ---------- ウェルネット: 種別ごとにCSV取得 ----------
@@ -255,14 +296,14 @@ async function geocode(addr) {
 async function main() {
   loadGeocodeCache();
   console.log("① WAMの座標テーブルを構築中...");
-  const wamCoord = await buildWamCoordMap();
-  console.log(`   WAM座標: ${wamCoord.size} 事業所`);
+  const { byNo: wamByNo, byAddr: wamByAddr } = await buildWamCoordMap();
+  console.log(`   WAM座標: 事業所番号 ${wamByNo.size} / 住所 ${wamByAddr.size}`);
 
   console.log("② ウェルネットの一覧を取得中（種別ごと）...");
   const out = [];
   const seen = new Set();
   const stats = {};
-  let needGeocode = 0, geocoded = 0, dropped = 0;
+  let viaNo = 0, viaAddr = 0, geocoded = 0, dropped = 0;
   const kinds = Object.keys(KIND_CATEGORY);
 
   for (const kind of kinds) {
@@ -294,12 +335,20 @@ async function main() {
       if (seen.has(id)) continue;
       seen.add(id);
 
-      // 座標: WAM突き合わせ → 失敗時ジオコーディング
-      let coord = bizNo && wamCoord.get(bizNo);
+      // 座標の決定順:
+      //   1) 事業所番号でWAM一致（公式座標）
+      //   2) 住所一致でWAM座標を再利用（併設サービスの公式座標）
+      //   3) 建物名を除いた住所でジオコーディング（推定 = approx）
+      let coord = null;
+      let approx = false;
+      if (bizNo && wamByNo.has(bizNo)) { coord = wamByNo.get(bizNo); viaNo++; }
       if (!coord) {
-        needGeocode++;
-        coord = await geocode(addr);
-        if (coord) geocoded++;
+        const key = normAddr(r[cAddr]);
+        if (key && wamByAddr.has(key)) { coord = wamByAddr.get(key); viaAddr++; }
+      }
+      if (!coord) {
+        coord = await geocode(addr.split(/[\s　]/)[0]); // 建物名を除いて精度向上
+        if (coord) { approx = true; geocoded++; }
       }
       if (!coord) { dropped++; continue; }
 
@@ -315,6 +364,7 @@ async function main() {
         corp: (r[cCorp] || "").trim(),
         lat: Math.round(coord.lat * 1e6) / 1e6,
         lng: Math.round(coord.lng * 1e6) / 1e6,
+        approx,
         tel: (r[cTel] || "").trim(),
         url: "",
         target,
@@ -326,6 +376,21 @@ async function main() {
   }
   saveGeocodeCache();
 
+  // 位置不確実の判定:
+  // 同一座標に「異なる住所」が3件以上集まっている点は、番地を特定できず代表点
+  // (区役所・町丁目の中心など)に落ちた粗い座標とみなし approx=true にする。
+  // ※ 同一法人・同一事業所が複数サービスを行うケースは住所が同じなので対象外。
+  const addrByCoord = {};
+  out.forEach((x) => {
+    const k = x.lat + "," + x.lng;
+    (addrByCoord[k] = addrByCoord[k] || new Set()).add(x.address);
+  });
+  let coarse = 0;
+  out.forEach((x) => {
+    const k = x.lat + "," + x.lng;
+    if (addrByCoord[k].size >= 3) { x.approx = true; coarse++; }
+  });
+
   out.sort(
     (a, b) =>
       a.ward.localeCompare(b.ward, "ja") ||
@@ -336,7 +401,8 @@ async function main() {
 
   console.log("\n=== カテゴリ別件数 ===");
   Object.entries(stats).sort().forEach(([k, v]) => console.log(`  ${k}: ${v}`));
-  console.log(`\n座標補完: WAM一致 ${out.length - geocoded} / ジオコーディング ${geocoded}（要求 ${needGeocode}・座標取得失敗で除外 ${dropped}）`);
+  console.log(`\n座標の出所: 事業所番号一致 ${viaNo} / 住所一致 ${viaAddr} / ジオコーディング(推定) ${geocoded} / 取得失敗で除外 ${dropped}`);
+  console.log(`位置不確実(approx)としてマーク: ${out.filter((x) => x.approx).length} 件（うち粗い代表点 ${coarse} 件）`);
   console.log(`✅ 合計 ${out.length} 件を ${path.relative(process.cwd(), OUT)} に書き出しました`);
 }
 

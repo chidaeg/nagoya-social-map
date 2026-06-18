@@ -275,7 +275,18 @@ function loadGeocodeCache() {
 function saveGeocodeCache() {
   fs.writeFileSync(GEOCODE_CACHE, JSON.stringify(geocodeCache));
 }
+const GOOGLE_KEY = process.env.GOOGLE_GEOCODING_KEY || "";
+const GOOGLE_API = "https://maps.googleapis.com/maps/api/geocode/json";
+const googleMemo = new Map(); // Google結果は規約(30日)順守のためディスクに永続化しない
+
+// 戻り値: { lat, lng, precise } または null
 async function geocode(addr) {
+  if (GOOGLE_KEY) return geocodeGoogle(addr);
+  return geocodeGsi(addr);
+}
+
+// GSI: 無料・永続保存可。番地が無い地域は町丁目止まり(precise=false)。
+async function geocodeGsi(addr) {
   if (addr in geocodeCache) return geocodeCache[addr];
   let result = null;
   try {
@@ -283,7 +294,7 @@ async function geocode(addr) {
     const arr = JSON.parse(json);
     if (Array.isArray(arr) && arr.length && arr[0].geometry) {
       const [lng, lat] = arr[0].geometry.coordinates;
-      if (inNagoya(lat, lng)) result = { lat, lng };
+      if (inNagoya(lat, lng)) result = { lat, lng, precise: false };
     }
   } catch (e) { /* null */ }
   geocodeCache[addr] = result;
@@ -292,9 +303,41 @@ async function geocode(addr) {
   return result;
 }
 
+// Google: 高精度。location_type=ROOFTOP/RANGE_INTERPOLATED を precise とみなす。
+async function geocodeGoogle(addr) {
+  if (googleMemo.has(addr)) return googleMemo.get(addr);
+  let result = null;
+  try {
+    const url = `${GOOGLE_API}?address=${encodeURIComponent(
+      addr
+    )}&language=ja&region=jp&key=${GOOGLE_KEY}`;
+    const json = await httpGet(url);
+    const data = JSON.parse(json);
+    if (data.status === "OK" && data.results.length) {
+      const g = data.results[0].geometry;
+      const lat = g.location.lat, lng = g.location.lng;
+      if (inNagoya(lat, lng)) {
+        const precise =
+          g.location_type === "ROOFTOP" || g.location_type === "RANGE_INTERPOLATED";
+        result = { lat, lng, precise };
+      }
+    } else if (data.status === "OVER_QUERY_LIMIT" || data.status === "REQUEST_DENIED") {
+      throw new Error("Google Geocoding: " + data.status + " " + (data.error_message || ""));
+    }
+  } catch (e) {
+    if (/REQUEST_DENIED|OVER_QUERY_LIMIT/.test(e.message)) throw e;
+  }
+  googleMemo.set(addr, result);
+  await sleep(60);
+  return result;
+}
+
 // ---------- メイン ----------
 async function main() {
   loadGeocodeCache();
+  console.log(
+    `ジオコーダ: ${GOOGLE_KEY ? "Google Geocoding API（高精度）" : "国土地理院 GSI（無料）"}`
+  );
   console.log("① WAMの座標テーブルを構築中...");
   const { byNo: wamByNo, byAddr: wamByAddr } = await buildWamCoordMap();
   console.log(`   WAM座標: 事業所番号 ${wamByNo.size} / 住所 ${wamByAddr.size}`);
@@ -347,8 +390,12 @@ async function main() {
         if (key && wamByAddr.has(key)) { coord = wamByAddr.get(key); viaAddr++; }
       }
       if (!coord) {
-        coord = await geocode(addr.split(/[\s　]/)[0]); // 建物名を除いて精度向上
-        if (coord) { approx = true; geocoded++; }
+        const g = await geocode(addr.split(/[\s　]/)[0]); // 建物名を除いて精度向上
+        if (g) {
+          coord = { lat: g.lat, lng: g.lng };
+          approx = !g.precise; // Googleで番地確定(ROOFTOP等)なら正確扱い
+          geocoded++;
+        }
       }
       if (!coord) { dropped++; continue; }
 

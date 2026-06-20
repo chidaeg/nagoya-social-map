@@ -1,0 +1,52 @@
+name: Regenerate data (Google Geocoding)
+
+# 事業所データ(data/facilities.json)を定期的に再生成する。
+# Google Geocoding の規約（座標キャッシュは最大30日）を守るため、
+# 毎月1日・15日（最大約16日間隔）に再生成→コミット→デプロイまで一括で行う。
+on:
+  schedule:
+    - cron: "0 18 1,15 * *" # 毎月1日・15日 18:00 UTC（= 翌03:00 JST）
+  workflow_dispatch: # 手動実行（動作確認・臨時再生成用）
+
+permissions:
+  contents: write # facilities.json のコミット/プッシュに必要
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 事業所データを再生成（Google高精度ジオコーディング）
+        env:
+          # GitHub Secrets に登録した②の秘密キー。未設定なら build-data.js は
+          # 自動で国土地理院(GSI)にフォールバックする（env-gated 実装）。
+          GOOGLE_GEOCODING_KEY: ${{ secrets.GOOGLE_GEOCODING_KEY }}
+        run: node scripts/build-data.js
+
+      - name: 変更があればコミット＆プッシュ
+        run: |
+          if [ -n "$(git status --porcelain data/facilities.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add data/facilities.json
+            git commit -m "data: 定期再生成（Google Geocoding, $(date -u +%Y-%m-%d) UTC）"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "facilities.json に変更なし（デプロイのみ実施）"
+          fi
+        id: commit
+
+      # 自動コミットは deploy.yml をトリガーしない（GITHUB_TOKEN仕様）ため、
+      # ここで明示的に Cloudflare Worker へデプロイして反映まで完結させる。
+      - name: Cloudflare Worker へデプロイ
+        uses: cloudflare/wrangler-action@v3
+        with:
+          wranglerVersion: "4.103.0"
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

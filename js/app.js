@@ -61,8 +61,12 @@
         maxZoom: 14,
       }),
     });
-    mapReady = true;
-    maybeBuildMarkers();
+    // 地図の投影(projection)が使える初回idle後にマーカーを構築する。
+    // ビューポート方式は描画時にprojectionが必要で、即時実行するとnullになる。
+    google.maps.event.addListenerOnce(map, "idle", function () {
+      mapReady = true;
+      maybeBuildMarkers();
+    });
   };
 
   // キー不正・課金未設定など読み込み失敗時の案内

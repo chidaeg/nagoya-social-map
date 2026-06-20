@@ -1,0 +1,10 @@
+# Worker の静的アセットとして配信しないもの（gitignore 形式）
+.git/
+.github/
+.claude/
+scripts/
+README.md
+wrangler.jsonc
+.assetsignore
+.gitignore
+node_modules/

@@ -1,0 +1,11 @@
+{
+  // Cloudflare Worker（静的アセット配信）の設定。
+  // GitHub Actions から `wrangler deploy` で既存 Worker を更新する。
+  "name": "nagoya-social-map",
+  "compatibility_date": "2025-06-01",
+  // サイト一式（index.html / css / js / data）をそのまま配信。
+  // 配信したくないファイルは .assetsignore で除外する。
+  "assets": {
+    "directory": "./"
+  }
+}

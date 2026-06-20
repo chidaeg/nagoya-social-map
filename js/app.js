@@ -52,11 +52,15 @@
       markers: [],
       // クラスタをクリックしても拡大しない（標準のズーム挙動を無効化）
       onClusterClick: () => {},
-      // 表示範囲内のマーカーだけをクラスタ化する軽量アルゴリズム（ズーム/移動が軽い）。
-      // radius: まとめる範囲（大きいほど軽い）。
+      // SuperCluster でマーカーをクラスタ化する。
+      // （ビューポート方式 SuperClusterViewportAlgorithm はライブラリ側の不具合で
+      //   「Cannot read properties of undefined (reading 'range')」を投げ、
+      //   マーカーが一切描画されないため、安定動作する標準方式に切り替え。
+      //   6,900件程度なら標準方式でも十分軽快。）
+      // radius: まとめる範囲（大きいほどまとまりやすい）。
       // maxZoom: この値を超えてズームインするとクラスタを解除して個別ピン表示
       //   （小さいほど早くピンに変わる。地図の初期ズームは12）。
-      algorithm: new markerClusterer.SuperClusterViewportAlgorithm({
+      algorithm: new markerClusterer.SuperClusterAlgorithm({
         radius: 100,
         maxZoom: 14,
       }),

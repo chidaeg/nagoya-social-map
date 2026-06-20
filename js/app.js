@@ -47,7 +47,14 @@
       gestureHandling: "greedy",
     });
     infoWindow = new google.maps.InfoWindow({ maxWidth: 320 });
-    clusterer = new markerClusterer.MarkerClusterer({ map, markers: [] });
+    clusterer = new markerClusterer.MarkerClusterer({
+      map,
+      markers: [],
+      // クラスタをクリックしても拡大しない（標準のズーム挙動を無効化）
+      onClusterClick: () => {},
+      // まとめる範囲を広げて同時描画数を減らす（既定60px→100px）。軽量化。
+      algorithm: new markerClusterer.SuperClusterAlgorithm({ radius: 100 }),
+    });
     mapReady = true;
     maybeBuildMarkers();
   };

@@ -52,8 +52,14 @@
       markers: [],
       // クラスタをクリックしても拡大しない（標準のズーム挙動を無効化）
       onClusterClick: () => {},
-      // まとめる範囲を広げて同時描画数を減らす（既定60px→100px）。軽量化。
-      algorithm: new markerClusterer.SuperClusterAlgorithm({ radius: 100 }),
+      // 表示範囲内のマーカーだけをクラスタ化する軽量アルゴリズム（ズーム/移動が軽い）。
+      // radius: まとめる範囲（大きいほど軽い）。
+      // maxZoom: この値を超えてズームインするとクラスタを解除して個別ピン表示
+      //   （小さいほど早くピンに変わる。地図の初期ズームは12）。
+      algorithm: new markerClusterer.SuperClusterViewportAlgorithm({
+        radius: 100,
+        maxZoom: 14,
+      }),
     });
     mapReady = true;
     maybeBuildMarkers();

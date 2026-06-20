@@ -11,6 +11,7 @@
   let infoWindow = null;
   let mapReady = false;
   let markersBuilt = false;
+  let clustererSynced = false; // 初回クラスタ描画はコンストラクタ任せ→render()で1度だけスキップ
 
   // 状態
   const state = {
@@ -47,26 +48,11 @@
       gestureHandling: "greedy",
     });
     infoWindow = new google.maps.InfoWindow({ maxWidth: 320 });
-    clusterer = new markerClusterer.MarkerClusterer({
-      map,
-      markers: [],
-      // クラスタをクリックしても拡大しない（標準のズーム挙動を無効化）
-      onClusterClick: () => {},
-      // SuperCluster でマーカーをクラスタ化する。
-      // （ビューポート方式 SuperClusterViewportAlgorithm はライブラリ側の不具合で
-      //   「Cannot read properties of undefined (reading 'range')」を投げ、
-      //   マーカーが一切描画されないため、安定動作する標準方式に切り替え。
-      //   6,900件程度なら標準方式でも十分軽快。）
-      // radius: まとめる範囲（大きいほどまとまりやすい）。
-      // maxZoom: この値を超えてズームインするとクラスタを解除して個別ピン表示
-      //   （小さいほど早くピンに変わる。地図の初期ズームは12）。
-      algorithm: new markerClusterer.SuperClusterAlgorithm({
-        radius: 100,
-        maxZoom: 14,
-      }),
-    });
-    // 地図の投影(projection)が使える初回idle後にマーカーを構築する。
-    // ビューポート方式は描画時にprojectionが必要で、即時実行するとnullになる。
+    // クラスタリングは maybeBuildMarkers() で全マーカーをそろえてから生成する。
+    // （ビューポート方式は①描画時にprojectionが必要 ②初回renderで必ずマーカーを
+    //   load() させる必要がある——空のmarkersで生成すると getClusters が未構築の
+    //   trees を触り「Cannot read properties of undefined (reading 'range')」で落ちる——
+    //   ため、projectionが使える初回idle後にマーカーごとまとめて生成する。）
     google.maps.event.addListenerOnce(map, "idle", function () {
       mapReady = true;
       maybeBuildMarkers();
@@ -250,20 +236,34 @@
     });
   }
 
+  // 絞り込み結果（facility配列）→ 対応するマーカー配列
+  function visibleMarkerList(list) {
+    const visibleMarkers = [];
+    list.forEach((f) => {
+      const m = state.markers.get(f.id);
+      if (m) visibleMarkers.push(m);
+    });
+    return visibleMarkers;
+  }
+
+  // クラスタへ反映する絞り込み。初回はクラスタ生成時に描画済みなのでスキップし、
+  // overlayのprojectionが未準備の瞬間に clearMarkers/addMarkers が走るのを防ぐ。
+  function updateClusterer(list) {
+    if (!mapReady || !markersBuilt || !clusterer) return;
+    if (!clustererSynced) {
+      clustererSynced = true;
+      return;
+    }
+    clusterer.clearMarkers();
+    clusterer.addMarkers(visibleMarkerList(list));
+  }
+
   // ----- 描画 -----
   function render() {
     const list = filtered();
 
-    // 地図マーカー（クラスタ）を再構築
-    if (mapReady && markersBuilt) {
-      const visibleMarkers = [];
-      list.forEach((f) => {
-        const m = state.markers.get(f.id);
-        if (m) visibleMarkers.push(m);
-      });
-      clusterer.clearMarkers();
-      clusterer.addMarkers(visibleMarkers);
-    }
+    // 地図マーカー（クラスタ）を絞り込みに合わせて再構築
+    updateClusterer(list);
 
     // 一覧（多すぎると重いので上限まで描画。地図には全件表示される）
     els.count.textContent = list.length;
@@ -357,12 +357,30 @@
     });
   }
 
-  // 地図とデータが両方そろったらマーカーを生成する
+  // 地図とデータが両方そろったらマーカーとクラスタリングを生成する
   function maybeBuildMarkers() {
     if (!mapReady || markersBuilt || !state.facilities.length) return;
     state.facilities.forEach((f) => state.markers.set(f.id, makeMarker(f)));
+
+    // 表示範囲内のマーカーだけをクラスタ化／描画する軽量アルゴリズム。
+    // ズームインで全件が個別ピン化しても、画面外は描画しないので軽い。
+    //   radius: まとめる範囲。 maxZoom: これを超えてズームインすると個別ピン表示。
+    // 絞り込み後のマーカーを渡して生成することで、初回renderで必ず load() が走り、
+    // getClusters-before-load クラッシュ（reading 'range'）を回避する。
+    // 以降の描画はコンストラクタ（overlayのprojection準備後に実行）に任せ、
+    // render() 側のクラスタ更新は初回スキップする（updateClusterer 参照）。
+    clusterer = new markerClusterer.MarkerClusterer({
+      map,
+      markers: visibleMarkerList(filtered()),
+      onClusterClick: () => {}, // クラスタのクリック拡大を無効化
+      algorithm: new markerClusterer.SuperClusterViewportAlgorithm({
+        radius: 100,
+        maxZoom: 14,
+      }),
+    });
+
     markersBuilt = true;
-    render();
+    render(); // 一覧を反映（クラスタは上で生成済みなので初回は触らない）
   }
 
   // ----- データ読み込み -----

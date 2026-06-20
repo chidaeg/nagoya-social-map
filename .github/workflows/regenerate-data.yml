@@ -19,7 +19,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # wrangler 4系のデプロイは Node 22+ が必須（20だと deploy が失敗する）。
+          # build-data.js は 22 でも問題なく動作。
+          node-version: "22"
 
       - name: 事業所データを再生成（Google高精度ジオコーディング）
         env:

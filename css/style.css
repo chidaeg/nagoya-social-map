@@ -99,6 +99,41 @@ body {
 }
 
 /* ---------- Sidebar controls ---------- */
+.search-panel__toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.search-panel__toggle:hover {
+  background: #f8fafc;
+}
+
+.search-panel__chevron {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  transition: transform 0.18s ease;
+}
+
+/* 折りたたみ時: 本体を隠し、シェブロンを倒す */
+.search-panel.collapsed .search-panel__body {
+  display: none;
+}
+
+.search-panel.collapsed .search-panel__chevron {
+  transform: rotate(-90deg);
+}
+
 .search-box {
   padding: 12px 14px 6px;
 }

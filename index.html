@@ -29,31 +29,46 @@
 
     <div class="app-body">
       <aside class="sidebar" id="sidebar">
-        <div class="search-box">
-          <input
-            type="search"
-            id="search-input"
-            placeholder="事業所名・住所で検索"
-            autocomplete="off"
-          />
-        </div>
+        <div class="search-panel" id="search-panel">
+          <button
+            type="button"
+            class="search-panel__toggle"
+            id="search-panel-toggle"
+            aria-expanded="true"
+            aria-controls="search-panel-body"
+          >
+            <span>🔍 絞り込み</span>
+            <span class="search-panel__chevron" aria-hidden="true">▾</span>
+          </button>
 
-        <div class="filter-row">
-          <label for="ward-select">区で絞り込み</label>
-          <select id="ward-select">
-            <option value="">すべての区</option>
-          </select>
-        </div>
+          <div class="search-panel__body" id="search-panel-body">
+            <div class="search-box">
+              <input
+                type="search"
+                id="search-input"
+                placeholder="事業所名・住所で検索"
+                autocomplete="off"
+              />
+            </div>
 
-        <div class="filter-section">
-          <div class="filter-section__head">
-            <span>カテゴリ</span>
-            <div class="filter-section__actions">
-              <button id="check-all" type="button">全選択</button>
-              <button id="uncheck-all" type="button">全解除</button>
+            <div class="filter-row">
+              <label for="ward-select">区で絞り込み</label>
+              <select id="ward-select">
+                <option value="">すべての区</option>
+              </select>
+            </div>
+
+            <div class="filter-section">
+              <div class="filter-section__head">
+                <span>カテゴリ</span>
+                <div class="filter-section__actions">
+                  <button id="check-all" type="button">全選択</button>
+                  <button id="uncheck-all" type="button">全解除</button>
+                </div>
+              </div>
+              <div id="category-filters" class="category-filters"></div>
             </div>
           </div>
-          <div id="category-filters" class="category-filters"></div>
         </div>
 
         <div class="result-summary">

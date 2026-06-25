@@ -40,8 +40,12 @@
     uncheckAll: document.getElementById("uncheck-all"),
     sidebar: document.getElementById("sidebar"),
     toggleSidebar: document.getElementById("toggle-sidebar"),
+    searchPanel: document.getElementById("search-panel"),
+    searchPanelToggle: document.getElementById("search-panel-toggle"),
     map: document.getElementById("map"),
   };
+
+  const SEARCH_COLLAPSED_KEY = "nagoya-map:search-collapsed";
 
   // ===== Google Maps 初期化（APIのcallbackから呼ばれる）=====
   window.initMap = function () {
@@ -475,6 +479,23 @@
     els.toggleSidebar.addEventListener("click", () => {
       els.sidebar.classList.toggle("open");
     });
+
+    // 絞り込みパネルの開閉（前回状態を localStorage に保存）
+    applySearchCollapsed(localStorage.getItem(SEARCH_COLLAPSED_KEY) === "1");
+    els.searchPanelToggle.addEventListener("click", () => {
+      const collapsed = !els.searchPanel.classList.contains("collapsed");
+      applySearchCollapsed(collapsed);
+      try {
+        localStorage.setItem(SEARCH_COLLAPSED_KEY, collapsed ? "1" : "0");
+      } catch {
+        /* プライベートモード等で書けなくても無視 */
+      }
+    });
+  }
+
+  function applySearchCollapsed(collapsed) {
+    els.searchPanel.classList.toggle("collapsed", collapsed);
+    els.searchPanelToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
   }
 
   // 地図とデータが両方そろったらマーカーとクラスタリングを生成する

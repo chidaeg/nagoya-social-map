@@ -9,6 +9,9 @@
   let map = null;
   let clusterer = null;
   let infoWindow = null;
+  // 開いている吹き出しの状態。同一地点に複数事業所がある場合、members に該当の
+  // 事業所を並べ、index を ◀ ▶ で切り替える（ページャー）。
+  let popupState = null; // { members: [facility...], index: number } or null
   let mapReady = false;
   let markersBuilt = false;
   let clustererSynced = false; // 初回クラスタ描画はコンストラクタ任せ→render()で1度だけスキップ
@@ -16,7 +19,8 @@
   // 状態
   const state = {
     facilities: [],
-    markers: new Map(), // id -> google.maps.Marker
+    markers: new Map(), // coordKey -> google.maps.Marker（同一地点は1マーカーに集約）
+    groups: new Map(), // coordKey -> [facility...]（同一座標の事業所をまとめる）
     activeCategories: new Set(),
     ward: "",
     query: "",
@@ -58,9 +62,18 @@
       gestureHandling: "greedy",
     });
     infoWindow = new google.maps.InfoWindow({ maxWidth: 320 });
-    // 吹き出しのDOMが描画されるたびにメモ欄を読み込む（開くたびに発火）。
+    // 吹き出しのDOMが描画されるたびに発火（開く／ページ切替のたび）。
     infoWindow.addListener("domready", () => {
       document.querySelectorAll(".popup__memo").forEach(hydrateMemo);
+      // 同一地点に複数事業所がある場合の ◀ ▶ ページャー
+      document.querySelectorAll(".popup__pager-btn").forEach((btn) => {
+        btn.onclick = () => {
+          if (!popupState || popupState.members.length < 2) return;
+          const n = popupState.members.length;
+          popupState.index = (popupState.index + Number(btn.dataset.dir) + n) % n;
+          renderPopup();
+        };
+      });
     });
     // 吹き出し以外（地図の余白）をクリックしたら閉じる。
     map.addListener("click", closeInfo);
@@ -166,40 +179,87 @@
     };
   }
 
-  function makeMarker(f) {
-    const color = window.CATEGORY_COLOR[f.category] || "#64748b";
+  // 同一座標を束ねるためのキー
+  function coordKey(f) {
+    return f.lat + "," + f.lng;
+  }
+
+  // state.facilities を座標ごとに state.groups へ集約する
+  function buildGroups() {
+    state.groups.clear();
+    state.facilities.forEach((f) => {
+      const k = coordKey(f);
+      if (!state.groups.has(k)) state.groups.set(k, []);
+      state.groups.get(k).push(f);
+    });
+  }
+
+  // 同一地点の事業所群につき1つのマーカーを作る（重なりで埋もれるのを防ぐ）。
+  // 見た目・位置は先頭事業所を代表に使い、クリックで吹き出し（ページャー付き）を開く。
+  function makeGroupMarker(key, facilities) {
+    const rep = facilities[0];
+    const color = window.CATEGORY_COLOR[rep.category] || "#64748b";
+    const extra = facilities.length - 1;
     const marker = new google.maps.Marker({
-      position: { lat: f.lat, lng: f.lng },
-      icon: markerIcon(f, color),
-      title: f.name,
+      position: { lat: rep.lat, lng: rep.lng },
+      icon: markerIcon(rep, color),
+      title: extra > 0 ? rep.name + " 他" + extra + "件" : rep.name,
     });
-    marker.facilityId = f.id;
-    marker.addListener("click", () => {
-      openInfo(f);
-      highlightList(f.id);
-    });
+    marker.groupKey = key;
+    marker.addListener("click", () => openInfoForFacility(rep));
     return marker;
   }
 
-  function openInfo(f) {
+  // ある事業所の吹き出しを開く。同一地点の「現在の絞り込みで表示中の」事業所を
+  // members に並べ、f をその先頭ページに合わせて表示する。
+  function openInfoForFacility(f) {
+    const visible = new Set(filtered().map((x) => x.id));
+    const all = state.groups.get(coordKey(f)) || [f];
+    let members = all.filter((x) => visible.has(x.id));
+    if (!members.length) members = [f]; // 念のためのフォールバック
+    let index = members.findIndex((x) => x.id === f.id);
+    if (index < 0) index = 0;
+    popupState = { members, index };
+    renderPopup();
+  }
+
+  // popupState の内容で吹き出しを描画する（初回表示・ページ切替の両方で使う）。
+  function renderPopup() {
+    const { members, index } = popupState;
+    const f = members[index];
     // 位置指定でInfoWindowを開く（クラスタ内マーカーでも確実に表示される）
-    infoWindow.setContent(popupHtml(f));
+    infoWindow.setContent(popupHtml(f, index, members.length));
     infoWindow.setPosition({ lat: f.lat, lng: f.lng });
     infoWindow.open(map);
     state.activeId = f.id;
+    highlightList(f.id);
   }
 
   // 吹き出しを閉じ、一覧のアクティブ表示も解除する。
   // （地図クリック・吹き出しの×ボタンの両方から呼ばれる）
   function closeInfo() {
     infoWindow.close();
+    popupState = null;
     state.activeId = null;
     els.list.querySelectorAll(".facility-item.active").forEach((li) => {
       li.classList.remove("active");
     });
   }
 
-  function popupHtml(f) {
+  function popupHtml(f, index, total) {
+    // 同一地点に複数事業所がある場合のページャー（◀ n / N ▶）
+    const pager =
+      total > 1
+        ? '<div class="popup__pager">' +
+          '<button type="button" class="popup__pager-btn" data-dir="-1" aria-label="前の事業所">◀</button>' +
+          '<span class="popup__pager-pos">' +
+          (index + 1) +
+          " / " +
+          total +
+          " 件（同じ場所）</span>" +
+          '<button type="button" class="popup__pager-btn" data-dir="1" aria-label="次の事業所">▶</button>' +
+          "</div>"
+        : "";
     const targets = (f.target || [])
       .map((t) => '<span class="tag">' + t + "</span>")
       .join("");
@@ -223,6 +283,7 @@
       : "";
     return (
       '<div class="popup">' +
+      pager +
       '<div class="popup__name">' +
       esc(f.name) +
       "</div>" +
@@ -360,11 +421,16 @@
     });
   }
 
-  // 絞り込み結果（facility配列）→ 対応するマーカー配列
+  // 絞り込み結果（facility配列）→ 対応するマーカー配列（同一地点は1つに集約）。
+  // 同じ座標の事業所が1件でも該当すれば、その地点のマーカーを表示する。
   function visibleMarkerList(list) {
+    const seen = new Set();
     const visibleMarkers = [];
     list.forEach((f) => {
-      const m = state.markers.get(f.id);
+      const key = coordKey(f);
+      if (seen.has(key)) return;
+      seen.add(key);
+      const m = state.markers.get(key);
       if (m) visibleMarkers.push(m);
     });
     return visibleMarkers;
@@ -455,7 +521,7 @@
         map.panTo({ lat: f.lat, lng: f.lng });
         if (map.getZoom() < 16) map.setZoom(16);
       }
-      openInfo(f);
+      openInfoForFacility(f);
     }
     highlightList(id);
     // モバイルでは地図を見せるためサイドバーを閉じる
@@ -501,7 +567,10 @@
   // 地図とデータが両方そろったらマーカーとクラスタリングを生成する
   function maybeBuildMarkers() {
     if (!mapReady || markersBuilt || !state.facilities.length) return;
-    state.facilities.forEach((f) => state.markers.set(f.id, makeMarker(f)));
+    buildGroups();
+    state.groups.forEach((facs, key) =>
+      state.markers.set(key, makeGroupMarker(key, facs))
+    );
 
     // 表示範囲内のマーカーだけをクラスタ化／描画する軽量アルゴリズム。
     // ズームインで全件が個別ピン化しても、画面外は描画しないので軽い。
@@ -635,7 +704,7 @@
   function refreshOpenPopup() {
     if (!state.activeId) return;
     const f = state.facilities.find((x) => x.id === state.activeId);
-    if (f) openInfo(f);
+    if (f) openInfoForFacility(f);
   }
 
   // ----- データ読み込み -----

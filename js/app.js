@@ -23,6 +23,12 @@
     activeId: null,
   };
 
+  // ログイン状態（Googleログイン）
+  const auth = {
+    clientId: null, // /api/config から取得
+    user: null, // { email, name } or null
+  };
+
   // ----- DOM参照 -----
   const els = {
     catFilters: document.getElementById("category-filters"),
@@ -48,6 +54,10 @@
       gestureHandling: "greedy",
     });
     infoWindow = new google.maps.InfoWindow({ maxWidth: 320 });
+    // 吹き出しのDOMが描画されるたびにメモ欄を読み込む（開くたびに発火）。
+    infoWindow.addListener("domready", () => {
+      document.querySelectorAll(".popup__memo").forEach(hydrateMemo);
+    });
     // クラスタリングは maybeBuildMarkers() で全マーカーをそろえてから生成する。
     // （ビューポート方式は①描画時にprojectionが必要 ②初回renderで必ずマーカーを
     //   load() させる必要がある——空のmarkersで生成すると getClusters が未構築の
@@ -212,8 +222,99 @@
         ? '<div class="popup__approx">📍 地図上の位置はおおよそです（番地を特定できず周辺を表示）</div>'
         : "") +
       (f.note ? '<div class="popup__row">' + esc(f.note) + "</div>" : "") +
+      // メモ欄（ログイン中だけ編集可。中身は domready 後に hydrateMemo で差し込む）
+      '<div class="popup__memo" data-id="' +
+      esc(f.id) +
+      '">' +
+      '<div class="popup__memo-head">📝 メモ</div>' +
+      '<div class="popup__memo-body">' +
+      (auth.user ? "読込中…" : "🔒 ログインするとメモを残せます") +
+      "</div>" +
+      "</div>" +
       "</div>"
     );
+  }
+
+  // ===== メモ欄（吹き出し内）=====
+
+  // domready で呼ばれ、メモを取得して編集UIを差し込む。
+  async function hydrateMemo(container) {
+    if (container.dataset.hydrated) return;
+    container.dataset.hydrated = "1";
+    if (!auth.user) return; // 未ログイン時はシェルの案内文のまま
+    const id = container.dataset.id;
+    const body = container.querySelector(".popup__memo-body");
+    body.textContent = "読込中…";
+    try {
+      const res = await fetch("/api/memo/" + encodeURIComponent(id));
+      if (!res.ok) throw new Error();
+      const memo = await res.json();
+      renderMemoEditor(container, id, memo);
+    } catch {
+      body.textContent = "メモの読込に失敗しました";
+    }
+  }
+
+  function renderMemoEditor(container, id, memo) {
+    const body = container.querySelector(".popup__memo-body");
+    body.innerHTML = "";
+
+    const ta = document.createElement("textarea");
+    ta.className = "popup__memo-input";
+    ta.placeholder = "この事業所のメモ（自分だけに表示）";
+    ta.value = memo && memo.text ? memo.text : "";
+
+    const row = document.createElement("div");
+    row.className = "popup__memo-row";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "popup__memo-save";
+    btn.textContent = "保存";
+    const status = document.createElement("span");
+    status.className = "popup__memo-status";
+    if (memo && memo.updatedAt) {
+      status.textContent =
+        "更新 " + fmtDate(memo.updatedAt) + (memo.author ? " / " + memo.author : "");
+    }
+
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      status.textContent = "保存中…";
+      try {
+        const res = await fetch("/api/memo/" + encodeURIComponent(id), {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text: ta.value }),
+        });
+        if (!res.ok) throw new Error();
+        const saved = await res.json();
+        status.textContent = saved
+          ? "保存しました（" + fmtDate(saved.updatedAt) + "）"
+          : "空のため削除しました";
+      } catch {
+        status.textContent = "保存に失敗しました";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    row.appendChild(btn);
+    row.appendChild(status);
+    body.appendChild(ta);
+    body.appendChild(row);
+  }
+
+  function fmtDate(iso) {
+    try {
+      return new Date(iso).toLocaleString("ja-JP", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return iso;
+    }
   }
 
   function esc(s) {
@@ -383,11 +484,126 @@
     render(); // 一覧を反映（クラスタは上で生成済みなので初回は触らない）
   }
 
+  // ===== Googleログイン =====
+
+  // GIS（Sign in with Google）スクリプトの読み込み待ち。
+  function waitForGIS() {
+    return new Promise((resolve, reject) => {
+      const ready = () => window.google && google.accounts && google.accounts.id;
+      if (ready()) return resolve();
+      let n = 0;
+      const t = setInterval(() => {
+        if (ready()) {
+          clearInterval(t);
+          resolve();
+        } else if (++n > 100) {
+          clearInterval(t);
+          reject(new Error("Googleログインを読み込めませんでした"));
+        }
+      }, 100);
+    });
+  }
+
+  async function initAuth() {
+    try {
+      const res = await fetch("/api/config");
+      const cfg = await res.json();
+      auth.clientId = cfg.clientId || null;
+      auth.user = cfg.user || null;
+    } catch {
+      /* 設定取得失敗時はログイン非表示のまま地図は使える */
+    }
+    if (auth.clientId) {
+      try {
+        await waitForGIS();
+        google.accounts.id.initialize({
+          client_id: auth.clientId,
+          callback: onGoogleCredential,
+        });
+      } catch {
+        /* GISが読めない場合はボタンを出さない */
+      }
+    }
+    updateAuthUI();
+  }
+
+  function updateAuthUI() {
+    const area = document.getElementById("auth-area");
+    if (!area) return;
+    area.innerHTML = "";
+
+    if (auth.user) {
+      const name = document.createElement("span");
+      name.className = "auth-user";
+      name.textContent = auth.user.name || auth.user.email;
+      const out = document.createElement("button");
+      out.type = "button";
+      out.className = "auth-btn";
+      out.textContent = "ログアウト";
+      out.addEventListener("click", logout);
+      area.appendChild(name);
+      area.appendChild(out);
+    } else if (auth.clientId && window.google && google.accounts && google.accounts.id) {
+      const holder = document.createElement("div");
+      area.appendChild(holder);
+      google.accounts.id.renderButton(holder, {
+        type: "standard",
+        theme: "outline",
+        size: "medium",
+        text: "signin",
+        shape: "pill",
+      });
+    }
+  }
+
+  async function onGoogleCredential(resp) {
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ credential: resp.credential }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        alert(e.error || "ログインに失敗しました");
+        return;
+      }
+      const data = await res.json();
+      auth.user = data.user;
+      updateAuthUI();
+      refreshOpenPopup();
+    } catch {
+      alert("ログインに失敗しました");
+    }
+  }
+
+  async function logout() {
+    try {
+      await fetch("/api/logout", { method: "POST" });
+    } catch {
+      /* ignore */
+    }
+    auth.user = null;
+    if (window.google && google.accounts && google.accounts.id) {
+      google.accounts.id.disableAutoSelect();
+    }
+    updateAuthUI();
+    refreshOpenPopup();
+  }
+
+  // 開いている吹き出しを今のログイン状態で開き直す（メモ欄を更新）。
+  function refreshOpenPopup() {
+    if (!state.activeId) return;
+    const f = state.facilities.find((x) => x.id === state.activeId);
+    if (f) openInfo(f);
+  }
+
   // ----- データ読み込み -----
   function load() {
     buildCategoryFilters();
     buildWardSelect();
     bindEvents();
+    initAuth();
 
     fetch("data/facilities.json")
       .then((r) => {

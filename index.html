@@ -19,9 +19,12 @@
           <span class="badge">非公式 / 出典: ウェルネットなごや</span>
         </p>
       </div>
-      <button id="toggle-sidebar" class="toggle-sidebar" aria-label="一覧の開閉">
-        ☰ 一覧
-      </button>
+      <div class="app-header__right">
+        <div id="auth-area" class="auth-area"></div>
+        <button id="toggle-sidebar" class="toggle-sidebar" aria-label="一覧の開閉">
+          ☰ 一覧
+        </button>
+      </div>
     </header>
 
     <div class="app-body">
@@ -75,6 +78,8 @@
       </main>
     </div>
 
+    <!-- Googleログイン（Sign in with Google）-->
+    <script src="https://accounts.google.com/gsi/client" async></script>
     <!-- マーカークラスタリング（Google Maps用） -->
     <script src="https://unpkg.com/@googlemaps/markerclusterer/dist/index.min.js"></script>
     <script src="data/categories.js"></script>

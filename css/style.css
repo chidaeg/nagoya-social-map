@@ -341,6 +341,111 @@ body {
   color: #9a3412;
 }
 
+/* メモ欄（吹き出し内） */
+.popup__memo {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.popup__memo-head {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.popup__memo-body {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.popup__memo-input {
+  width: 100%;
+  min-height: 64px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.popup__memo-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.popup__memo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.popup__memo-save {
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.popup__memo-save:hover {
+  background: var(--accent-dark);
+}
+
+.popup__memo-save:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.popup__memo-status {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+/* ヘッダーのログイン表示 */
+.app-header__right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.auth-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auth-user {
+  font-size: 0.78rem;
+  color: #fff;
+  opacity: 0.95;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-btn {
+  border: 0;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.auth-btn:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 760px) {
   :root {

@@ -12,5 +12,8 @@ Thumbs.db
 node_modules/
 npm-debug.log*
 
+# Wrangler のローカル作業フォルダ（キャッシュ・一時ファイル）
+.wrangler/
+
 # Claude Code のローカル個人設定
 .claude/settings.local.json

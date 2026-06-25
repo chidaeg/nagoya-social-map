@@ -1,11 +1,24 @@
 {
-  // Cloudflare Worker（静的アセット配信）の設定。
+  // Cloudflare Worker（静的アセット配信＋メモAPI）の設定。
   // GitHub Actions から `wrangler deploy` で既存 Worker を更新する。
   "name": "nagoya-social-map",
   "compatibility_date": "2025-06-01",
+  // Worker 本体。/api/memo/* を処理し、それ以外は ASSETS へ委譲する。
+  "main": "src/worker.js",
   // サイト一式（index.html / css / js / data）をそのまま配信。
   // 配信したくないファイルは .assetsignore で除外する。
+  // binding=ASSETS で Worker から env.ASSETS.fetch() 委譲できるようにする。
   "assets": {
-    "directory": "./"
+    "directory": "./",
+    "binding": "ASSETS"
+  },
+  // 事業所メモの保存先（簡易KV）。env.MEMOS でアクセスする。
+  "kv_namespaces": [
+    { "binding": "MEMOS", "id": "1bf0de403f0b407dbecb75e6e1d93116" }
+  ],
+  // GoogleログインのクライアントID（公開情報。ここに置いてよい）。
+  // SESSION_SECRET と ALLOWED_EMAILS は秘密のため `wrangler secret put` で設定する。
+  "vars": {
+    "GOOGLE_CLIENT_ID": "994628364674-gh81qf5m403jvnclec7dia3l73vg1t1f.apps.googleusercontent.com"
   }
 }

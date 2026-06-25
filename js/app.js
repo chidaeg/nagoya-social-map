@@ -58,6 +58,15 @@
     infoWindow.addListener("domready", () => {
       document.querySelectorAll(".popup__memo").forEach(hydrateMemo);
     });
+    // 吹き出し以外（地図の余白）をクリックしたら閉じる。
+    map.addListener("click", closeInfo);
+    // 吹き出しの×ボタンで閉じたときも一覧のアクティブ表示を解除する。
+    infoWindow.addListener("closeclick", () => {
+      state.activeId = null;
+      els.list.querySelectorAll(".facility-item.active").forEach((li) => {
+        li.classList.remove("active");
+      });
+    });
     // クラスタリングは maybeBuildMarkers() で全マーカーをそろえてから生成する。
     // （ビューポート方式は①描画時にprojectionが必要 ②初回renderで必ずマーカーを
     //   load() させる必要がある——空のmarkersで生成すると getClusters が未構築の
@@ -174,6 +183,16 @@
     infoWindow.setPosition({ lat: f.lat, lng: f.lng });
     infoWindow.open(map);
     state.activeId = f.id;
+  }
+
+  // 吹き出しを閉じ、一覧のアクティブ表示も解除する。
+  // （地図クリック・吹き出しの×ボタンの両方から呼ばれる）
+  function closeInfo() {
+    infoWindow.close();
+    state.activeId = null;
+    els.list.querySelectorAll(".facility-item.active").forEach((li) => {
+      li.classList.remove("active");
+    });
   }
 
   function popupHtml(f) {

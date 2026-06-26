@@ -572,9 +572,9 @@
     const max = Math.max(stats.clusters.markers.max, count, 1);
     const t = max <= 1 ? 0 : (count - 1) / (max - 1); // 0:最小 〜 1:最大
     const lerp = (a, b) => Math.round(a + (b - a) * t);
-    // 薄い青(225,238,255) → 濃い青(13,71,161) を補間
-    const fill = `rgb(${lerp(225, 13)},${lerp(238, 71)},${lerp(255, 161)})`;
-    const stroke = `rgb(${lerp(160, 8)},${lerp(200, 45)},${lerp(245, 110)})`;
+    // 薄い鮮やか青(125,196,255) → 濃い鮮やか青(0,92,230) を補間
+    const fill = `rgb(${lerp(125, 0)},${lerp(196, 92)},${lerp(255, 230)})`;
+    const stroke = `rgb(${lerp(70, 0)},${lerp(150, 60)},${lerp(235, 180)})`;
     const textColor = t > 0.5 ? "#ffffff" : "#0d47a1"; // 濃い背景は白文字
     const r = 22;
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${r * 2}" height="${r * 2}" viewBox="0 0 ${r * 2} ${r * 2}"><circle cx="${r}" cy="${r}" r="${r - 2}" fill="${fill}" fill-opacity="0.92" stroke="${stroke}" stroke-width="2"/></svg>`;

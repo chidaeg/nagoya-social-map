@@ -564,6 +564,37 @@
     els.searchPanelToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
   }
 
+  // クラスタの吹き出し（数字つき円）を描画する。
+  // 件数が多いクラスタほど濃い青、少ないほど薄い青で表示する。
+  // count を、画面内クラスタの最大件数 stats.clusters.markers.max に対する
+  // 比率で評価し、薄い青→濃い青へ線形補間する。
+  function renderCluster({ count, position }, stats) {
+    const max = Math.max(stats.clusters.markers.max, count, 1);
+    const t = max <= 1 ? 0 : (count - 1) / (max - 1); // 0:最小 〜 1:最大
+    const lerp = (a, b) => Math.round(a + (b - a) * t);
+    // 薄い青(225,238,255) → 濃い青(13,71,161) を補間
+    const fill = `rgb(${lerp(225, 13)},${lerp(238, 71)},${lerp(255, 161)})`;
+    const stroke = `rgb(${lerp(160, 8)},${lerp(200, 45)},${lerp(245, 110)})`;
+    const textColor = t > 0.5 ? "#ffffff" : "#0d47a1"; // 濃い背景は白文字
+    const r = 22;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${r * 2}" height="${r * 2}" viewBox="0 0 ${r * 2} ${r * 2}"><circle cx="${r}" cy="${r}" r="${r - 2}" fill="${fill}" fill-opacity="0.92" stroke="${stroke}" stroke-width="2"/></svg>`;
+    return new google.maps.Marker({
+      position,
+      zIndex: 1000 + count,
+      icon: {
+        url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+        scaledSize: new google.maps.Size(r * 2, r * 2),
+        anchor: new google.maps.Point(r, r),
+      },
+      label: {
+        text: String(count),
+        color: textColor,
+        fontSize: "13px",
+        fontWeight: "700",
+      },
+    });
+  }
+
   // 地図とデータが両方そろったらマーカーとクラスタリングを生成する
   function maybeBuildMarkers() {
     if (!mapReady || markersBuilt || !state.facilities.length) return;
@@ -587,6 +618,7 @@
         radius: 100,
         maxZoom: 14,
       }),
+      renderer: { render: renderCluster },
     });
 
     markersBuilt = true;

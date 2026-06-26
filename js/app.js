@@ -574,17 +574,20 @@
     const lerp = (a, b) => Math.round(a + (b - a) * t);
     // 薄い鮮やか青(125,196,255) → 濃い鮮やか青(0,92,230) を補間
     const fill = `rgb(${lerp(125, 0)},${lerp(196, 92)},${lerp(255, 230)})`;
-    const stroke = `rgb(${lerp(70, 0)},${lerp(150, 60)},${lerp(235, 180)})`;
     const textColor = t > 0.5 ? "#ffffff" : "#0d47a1"; // 濃い背景は白文字
-    const r = 22;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${r * 2}" height="${r * 2}" viewBox="0 0 ${r * 2} ${r * 2}"><circle cx="${r}" cy="${r}" r="${r - 2}" fill="${fill}" fill-opacity="0.92" stroke="${stroke}" stroke-width="2"/></svg>`;
+    const r = 20; // 円の半径
+    const pad = 8; // ぼかしが切れないようにする余白
+    const size = (r + pad) * 2;
+    const c = r + pad; // 中心
+    // 枠線は付けず、feGaussianBlur で輪郭をふわっとぼかす
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><defs><filter id="b" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3"/></filter></defs><circle cx="${c}" cy="${c}" r="${r}" fill="${fill}" fill-opacity="0.9" filter="url(#b)"/></svg>`;
     return new google.maps.Marker({
       position,
       zIndex: 1000 + count,
       icon: {
         url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
-        scaledSize: new google.maps.Size(r * 2, r * 2),
-        anchor: new google.maps.Point(r, r),
+        scaledSize: new google.maps.Size(size, size),
+        anchor: new google.maps.Point(c, c),
       },
       label: {
         text: String(count),

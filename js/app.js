@@ -598,6 +598,19 @@
     });
   }
 
+  // クラスタ（数字）をクリックしたら、その範囲が画面いっぱいになるまで
+  // 拡大して個別ピンを表示する。範囲が点（同一地点）の場合はその地点を
+  // 中心に maxZoom を超えるところまでズームインする。
+  function onClusterClick(event, cluster, map) {
+    const bounds = cluster.bounds;
+    if (bounds && !bounds.getNorthEast().equals(bounds.getSouthWest())) {
+      map.fitBounds(bounds, 60); // 60px の余白をつけて範囲にフィット
+    } else {
+      map.setCenter(cluster.position);
+      map.setZoom(Math.max((map.getZoom() || 0) + 2, 15)); // 個別ピンが出る所まで
+    }
+  }
+
   // 地図とデータが両方そろったらマーカーとクラスタリングを生成する
   function maybeBuildMarkers() {
     if (!mapReady || markersBuilt || !state.facilities.length) return;
@@ -616,7 +629,7 @@
     clusterer = new markerClusterer.MarkerClusterer({
       map,
       markers: visibleMarkerList(filtered()),
-      onClusterClick: () => {}, // クラスタのクリック拡大を無効化
+      onClusterClick: onClusterClick, // 数字クリックで個別ピンが見えるまで拡大
       algorithm: new markerClusterer.SuperClusterViewportAlgorithm({
         radius: 100,
         maxZoom: 14,

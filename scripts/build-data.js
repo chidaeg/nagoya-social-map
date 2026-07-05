@@ -205,11 +205,12 @@ function inNagoya(lat, lng) {
   );
 }
 
-// ---------- WAM: 事業所番号/住所 -> 座標 ----------
+// ---------- WAM: 事業所番号/住所 -> 座標・URL ----------
 async function buildWamCoordMap() {
   fs.mkdirSync(WAM_CACHE, { recursive: true });
   const byNo = new Map();
   const byAddr = new Map();
+  const urlByNo = new Map(); // 事業所番号 -> 公式サイトURL（事業所URL優先、無ければ法人URL）
   for (const num of WAM_NUMS) {
     const zip = path.join(WAM_CACHE, `sfkopendata_${WAM_VERSION}_${num}.zip`);
     const csv = path.join(WAM_CACHE, `csvdownload0${num}.csv`);
@@ -229,6 +230,8 @@ async function buildWamCoordMap() {
     const cAddr = H.indexOf("事業所住所（番地以降）");
     const cLat = H.indexOf("事業所緯度");
     const cLng = H.indexOf("事業所経度");
+    const cUrl = H.indexOf("事業所URL");
+    const cCorpUrl = H.indexOf("法人URL");
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
       const lat = parseFloat(r[cLat]);
@@ -239,9 +242,13 @@ async function buildWamCoordMap() {
       if (no && !byNo.has(no)) byNo.set(no, coord);
       const key = normAddr((r[cCity] || "") + (r[cAddr] || ""));
       if (key && !byAddr.has(key)) byAddr.set(key, coord);
+      const url = ((r[cUrl] || "").trim() || (r[cCorpUrl] || "").trim());
+      if (no && url && /^https?:\/\//.test(url) && !urlByNo.has(no)) {
+        urlByNo.set(no, url);
+      }
     }
   }
-  return { byNo, byAddr };
+  return { byNo, byAddr, urlByNo };
 }
 
 // ---------- ウェルネット: 種別ごとにCSV取得 ----------
@@ -339,8 +346,8 @@ async function main() {
     `ジオコーダ: ${GOOGLE_KEY ? "Google Geocoding API（高精度）" : "国土地理院 GSI（無料）"}`
   );
   console.log("① WAMの座標テーブルを構築中...");
-  const { byNo: wamByNo, byAddr: wamByAddr } = await buildWamCoordMap();
-  console.log(`   WAM座標: 事業所番号 ${wamByNo.size} / 住所 ${wamByAddr.size}`);
+  const { byNo: wamByNo, byAddr: wamByAddr, urlByNo: wamUrlByNo } = await buildWamCoordMap();
+  console.log(`   WAM座標: 事業所番号 ${wamByNo.size} / 住所 ${wamByAddr.size} / URL ${wamUrlByNo.size}`);
 
   console.log("② ウェルネットの一覧を取得中（種別ごと）...");
   const out = [];
@@ -413,7 +420,7 @@ async function main() {
         lng: Math.round(coord.lng * 1e6) / 1e6,
         approx,
         tel: (r[cTel] || "").trim(),
-        url: "",
+        url: (bizNo && wamUrlByNo.get(bizNo)) || "",
         target,
         features,
         note: "",

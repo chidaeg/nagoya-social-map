@@ -195,19 +195,30 @@
   }
 
   // 同一地点の事業所群につき1つのマーカーを作る（重なりで埋もれるのを防ぐ）。
-  // 見た目・位置は先頭事業所を代表に使い、クリックで吹き出し（ページャー付き）を開く。
+  // 見た目・クリック時の代表は絞り込みに合わせて syncMarkerRep で更新する。
   function makeGroupMarker(key, facilities) {
     const rep = facilities[0];
-    const color = window.CATEGORY_COLOR[rep.category] || "#64748b";
-    const extra = facilities.length - 1;
     const marker = new google.maps.Marker({
       position: { lat: rep.lat, lng: rep.lng },
-      icon: markerIcon(rep, color),
-      title: extra > 0 ? rep.name + " 他" + extra + "件" : rep.name,
     });
     marker.groupKey = key;
-    marker.addListener("click", () => openInfoForFacility(rep));
+    syncMarkerRep(marker, facilities);
+    marker.addListener("click", () => openInfoForFacility(marker.rep));
     return marker;
+  }
+
+  // マーカーの色・タイトル・クリック時の代表を「絞り込みで表示中の先頭事業所」に
+  // 合わせる。固定の代表だと、絞り込みで代表が非表示になったとき色分けがずれる。
+  function syncMarkerRep(marker, members) {
+    const rep = members[0];
+    const extra = members.length - 1;
+    const title = extra > 0 ? rep.name + " 他" + extra + "件" : rep.name;
+    if (marker.rep && marker.rep.id === rep.id && marker.getTitle() === title) {
+      return;
+    }
+    marker.rep = rep;
+    marker.setIcon(markerIcon(rep, window.CATEGORY_COLOR[rep.category] || "#64748b"));
+    marker.setTitle(title);
   }
 
   // ある事業所の吹き出しを開く。同一地点の「現在の絞り込みで表示中の」事業所を
@@ -271,14 +282,14 @@
       : "";
     const tel = f.tel
       ? '<div class="popup__row"><b>TEL</b> <a href="tel:' +
-        f.tel +
+        esc(f.tel) +
         '">' +
-        f.tel +
+        esc(f.tel) +
         "</a></div>"
       : "";
     const url = f.url
       ? '<div class="popup__row"><a href="' +
-        f.url +
+        esc(f.url) +
         '" target="_blank" rel="noopener">公式サイト ↗</a></div>'
       : "";
     return (
@@ -414,7 +425,9 @@
       if (!state.activeCategories.has(f.category)) return false;
       if (state.ward && f.ward !== state.ward) return false;
       if (q) {
-        const hay = (f.name + " " + f.address + " " + f.category).toLowerCase();
+        const hay = (
+          f.name + " " + (f.corp || "") + " " + f.address + " " + f.category
+        ).toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -423,15 +436,20 @@
 
   // 絞り込み結果（facility配列）→ 対応するマーカー配列（同一地点は1つに集約）。
   // 同じ座標の事業所が1件でも該当すれば、その地点のマーカーを表示する。
+  // あわせて各マーカーの色・タイトルを表示中の先頭事業所に同期する。
   function visibleMarkerList(list) {
-    const seen = new Set();
-    const visibleMarkers = [];
+    const visibleGroups = new Map(); // coordKey -> 表示中の事業所（絞り込み後）
     list.forEach((f) => {
       const key = coordKey(f);
-      if (seen.has(key)) return;
-      seen.add(key);
+      if (!visibleGroups.has(key)) visibleGroups.set(key, []);
+      visibleGroups.get(key).push(f);
+    });
+    const visibleMarkers = [];
+    visibleGroups.forEach((members, key) => {
       const m = state.markers.get(key);
-      if (m) visibleMarkers.push(m);
+      if (!m) return;
+      syncMarkerRep(m, members);
+      visibleMarkers.push(m);
     });
     return visibleMarkers;
   }
@@ -532,9 +550,15 @@
 
   // ----- イベント -----
   function bindEvents() {
+    // 検索は1文字ごとに全件フィルタ＋クラスタ再構築が走るため、
+    // 入力が少し落ち着いてから反映する（デバウンス）。
+    let searchTimer = null;
     els.search.addEventListener("input", (e) => {
-      state.query = e.target.value;
-      render();
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        state.query = e.target.value;
+        render();
+      }, 150);
     });
     els.wardSelect.addEventListener("change", (e) => {
       state.ward = e.target.value;

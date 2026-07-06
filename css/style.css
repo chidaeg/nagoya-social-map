@@ -24,9 +24,15 @@ body {
   background: var(--bg);
 }
 
+body {
+  display: flex;
+  flex-direction: column;
+}
+
 /* ---------- Header ---------- */
 .app-header {
-  height: var(--header-h);
+  min-height: var(--header-h);
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -37,6 +43,10 @@ body {
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.15);
   position: relative;
   z-index: 1100;
+}
+
+.app-header__titles {
+  min-width: 0;
 }
 
 .app-header h1 {
@@ -75,7 +85,8 @@ body {
 /* ---------- Layout ---------- */
 .app-body {
   display: flex;
-  height: calc(100% - var(--header-h));
+  flex: 1;
+  min-height: 0;
 }
 
 .sidebar {
@@ -523,9 +534,30 @@ body {
 @media (max-width: 760px) {
   :root {
     --sidebar-w: 100%;
+    --header-h: 52px;
+  }
+  .app-header {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    padding: 8px 12px;
+  }
+  .app-header h1 {
+    font-size: 0.9rem;
+  }
+  .app-header__sub {
+    display: none;
+  }
+  .app-header__right {
+    flex: none;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .auth-user {
+    max-width: 88px;
   }
   .toggle-sidebar {
     display: block;
+    white-space: nowrap;
   }
   .app-body {
     position: relative;

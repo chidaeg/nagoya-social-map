@@ -17,3 +17,6 @@ npm-debug.log*
 
 # Claude Code のローカル個人設定
 .claude/settings.local.json
+
+# APIキー等の秘密情報（コミット禁止）
+.env

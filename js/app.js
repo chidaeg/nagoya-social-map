@@ -137,13 +137,23 @@
     els.catFilters.appendChild(frag);
   }
 
-  // ----- 区セレクトを生成 -----
+  // ----- 区・市町セレクトを生成 -----
   function buildWardSelect() {
-    window.NAGOYA_WARDS.forEach((w) => {
-      const opt = document.createElement("option");
-      opt.value = w;
-      opt.textContent = w;
-      els.wardSelect.appendChild(opt);
+    const groups = [
+      ["名古屋市", window.NAGOYA_WARDS],
+      ["近隣市町", window.ADJACENT_CITIES || []],
+    ];
+    groups.forEach(([label, wards]) => {
+      if (!wards.length) return;
+      const og = document.createElement("optgroup");
+      og.label = label;
+      wards.forEach((w) => {
+        const opt = document.createElement("option");
+        opt.value = w;
+        opt.textContent = w;
+        og.appendChild(opt);
+      });
+      els.wardSelect.appendChild(og);
     });
   }
 

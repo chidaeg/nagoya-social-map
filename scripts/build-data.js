@@ -7,6 +7,8 @@
  *            → 最新・名古屋市独自事業(移動支援/地域活動支援)・対象者情報を含む。座標は無し。
  * 座標     : WAM NET オープンデータ(全国CSV・緯度経度付き)を事業所番号で突き合わせて補完。
  *            突き合わない分のみ 国土地理院ジオコーディングAPI(無料)で住所から付与。
+ * 隣接市町 : 名古屋市に接する16市町村の事業所はWAM全国CSVから直接取り込み
+ *            （座標・URL付き。対象者/給食・入浴・送迎はウェルネット独自項目のため空）。
  *
  * 使い方:
  *   node scripts/build-data.js
@@ -106,8 +108,65 @@ const NAGOYA_WARDS = [
   "守山区", "緑区", "名東区", "天白区",
 ];
 const WARD_SET = new Set(NAGOYA_WARDS);
-const LAT_RANGE = [35.0, 35.3];
-const LNG_RANGE = [136.78, 137.07];
+// 名古屋市＋隣接市町を含む範囲（座標の妥当性チェック用）
+const LAT_RANGE = [34.95, 35.35];
+const LNG_RANGE = [136.75, 137.2];
+
+// 名古屋市に隣接する市町。matchはWAMの住所（愛知県を除いた部分）の先頭一致に使う。
+// 町村は「愛知郡東郷町」のように郡名を挟むため match と表示名(ward)を分けて持つ。
+const ADJACENT_CITIES = [
+  { match: "瀬戸市", ward: "瀬戸市" },
+  { match: "春日井市", ward: "春日井市" },
+  { match: "清須市", ward: "清須市" },
+  { match: "北名古屋市", ward: "北名古屋市" },
+  { match: "西春日井郡豊山町", ward: "豊山町" },
+  { match: "尾張旭市", ward: "尾張旭市" },
+  { match: "長久手市", ward: "長久手市" },
+  { match: "日進市", ward: "日進市" },
+  { match: "愛知郡東郷町", ward: "東郷町" },
+  { match: "豊明市", ward: "豊明市" },
+  { match: "大府市", ward: "大府市" },
+  { match: "東海市", ward: "東海市" },
+  { match: "あま市", ward: "あま市" },
+  { match: "海部郡大治町", ward: "大治町" },
+  { match: "海部郡蟹江町", ward: "蟹江町" },
+  { match: "海部郡飛島村", ward: "飛島村" },
+];
+
+// WAMの「サービス種別」-> 当サイトの表示カテゴリ（隣接市町の取り込み用）。
+// WAM側はＡ/Ｂが全角、共同生活援助に「（グループホーム）」が付かない等の表記差を吸収する。
+const WAM_SVC_CATEGORY = {
+  "居宅介護": "居宅介護",
+  "重度訪問介護": "重度訪問介護",
+  "同行援護": "同行援護",
+  "行動援護": "行動援護",
+  "重度障害者等包括支援": "重度障害者等包括支援",
+  "生活介護": "生活介護",
+  "短期入所": "短期入所",
+  "療養介護": "療養介護",
+  "就労継続支援Ａ型": "就労継続支援A型",
+  "就労継続支援Ｂ型": "就労継続支援B型",
+  "就労移行支援": "就労移行支援",
+  "就労定着支援": "就労定着支援",
+  "就労選択支援": "就労選択支援",
+  "自立訓練（機能訓練）": "自立訓練（機能訓練）",
+  "自立訓練（生活訓練）": "自立訓練（生活訓練）",
+  "児童発達支援": "児童発達支援",
+  "医療型児童発達支援": "医療型児童発達支援",
+  "放課後等デイサービス": "放課後等デイサービス",
+  "居宅訪問型児童発達支援": "居宅訪問型児童発達支援",
+  "保育所等訪問支援": "保育所等訪問支援",
+  "共同生活援助": "共同生活援助（グループホーム）",
+  "施設入所支援": "施設入所支援",
+  "宿泊型自立訓練": "宿泊型自立訓練",
+  "自立生活援助": "自立生活援助",
+  "福祉型障害児入所施設": "福祉型障害児入所施設",
+  "医療型障害児入所施設": "医療型障害児入所施設",
+  "計画相談支援": "計画相談支援",
+  "地域相談支援（地域移行支援）": "地域移行支援",
+  "地域相談支援（地域定着支援）": "地域定着支援",
+  "障害児相談支援": "障害児相談支援",
+};
 
 // ---------- 汎用 ----------
 function sleep(ms) {
@@ -198,7 +257,7 @@ function normAddr(addr) {
   return s;
 }
 
-function inNagoya(lat, lng) {
+function inArea(lat, lng) {
   return (
     lat >= LAT_RANGE[0] && lat <= LAT_RANGE[1] &&
     lng >= LNG_RANGE[0] && lng <= LNG_RANGE[1]
@@ -236,7 +295,7 @@ async function buildWamCoordMap() {
       const r = rows[i];
       const lat = parseFloat(r[cLat]);
       const lng = parseFloat(r[cLng]);
-      if (!isFinite(lat) || !isFinite(lng) || !inNagoya(lat, lng)) continue;
+      if (!isFinite(lat) || !isFinite(lng) || !inArea(lat, lng)) continue;
       const coord = { lat, lng };
       const no = (r[cNo] || "").trim();
       if (no && !byNo.has(no)) byNo.set(no, coord);
@@ -249,6 +308,92 @@ async function buildWamCoordMap() {
     }
   }
   return { byNo, byAddr, urlByNo };
+}
+
+// ---------- WAM: 隣接市町の事業所を直接取り込み ----------
+// ウェルネットは名古屋市内のみのため、隣接市町はWAM全国CSV（座標・URL付き）から作る。
+// 対象者(身体/知的等)・給食/入浴/送迎はウェルネット独自項目のため空になる。
+function matchAdjacentCity(cityAddr) {
+  const rest = (cityAddr || "").replace(/^愛知県/, "");
+  for (const c of ADJACENT_CITIES) {
+    if (rest.startsWith(c.match)) return c;
+  }
+  return null;
+}
+
+// WAMの「番地以降」には市町名や住所全体が重複して入っていることがあるため除去する。
+// 例: 「あま市坂牧北浦88」「甚目寺飛殿５０番地２愛知県あま市甚目寺飛殿50-2」
+function cleanWamBanchi(banchi, city) {
+  let s = (banchi || "").trim();
+  s = s.replace(/^愛知県/, "");
+  if (s.startsWith(city.match)) s = s.slice(city.match.length);
+  if (s.startsWith(city.ward)) s = s.slice(city.ward.length);
+  const i = s.indexOf("愛知県");
+  if (i > 0 && (s.slice(i + 3).startsWith(city.match) || s.slice(i + 3).startsWith(city.ward))) {
+    s = s.slice(0, i); // 住所全体の繰り返しを切り落とす
+  }
+  return s.trim();
+}
+
+// excludeBizNos: 名古屋市側（ウェルネット）に既に居る事業所番号。
+// 移転等でWAM側の所在地が古い場合があるため、鮮度の高いウェルネットを優先する。
+function collectAdjacentFacilities(excludeBizNos) {
+  const exclude = excludeBizNos || new Set();
+  const out = [];
+  const seen = new Set();
+  for (const num of WAM_NUMS) {
+    const csv = path.join(WAM_CACHE, `csvdownload0${num}.csv`);
+    if (!fs.existsSync(csv)) continue;
+    const rows = parseCsv(fs.readFileSync(csv, "utf8"));
+    const H = rows[0];
+    const c = (n) => H.indexOf(n);
+    const cSvc = c("サービス種別");
+    const cName = c("事業所の名称");
+    const cNo = c("事業所番号");
+    const cCorp = c("法人の名称");
+    const cCity = c("事業所住所（市区町村）");
+    const cAddr = c("事業所住所（番地以降）");
+    const cTel = c("事業所電話番号");
+    const cUrl = c("事業所URL");
+    const cCorpUrl = c("法人URL");
+    const cLat = c("事業所緯度");
+    const cLng = c("事業所経度");
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const city = matchAdjacentCity(r[cCity]);
+      if (!city) continue;
+      const category = WAM_SVC_CATEGORY[(r[cSvc] || "").trim()];
+      if (!category) continue;
+      const name = (r[cName] || "").trim();
+      if (!name) continue;
+      const lat = parseFloat(r[cLat]);
+      const lng = parseFloat(r[cLng]);
+      if (!isFinite(lat) || !isFinite(lng) || !inArea(lat, lng)) continue;
+      const bizNo = (r[cNo] || "").trim();
+      if (bizNo && exclude.has(bizNo)) continue;
+      const id = "wam_" + (bizNo || "n" + num + "_" + i) + "_" + category;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const url = (r[cUrl] || "").trim() || (r[cCorpUrl] || "").trim();
+      out.push({
+        id,
+        name,
+        category,
+        ward: city.ward,
+        address: city.ward + cleanWamBanchi(r[cAddr], city),
+        corp: (r[cCorp] || "").trim(),
+        lat: Math.round(lat * 1e6) / 1e6,
+        lng: Math.round(lng * 1e6) / 1e6,
+        approx: false,
+        tel: (r[cTel] || "").trim(),
+        url: /^https?:\/\//.test(url) ? url : "",
+        target: [],
+        features: [],
+        note: "",
+      });
+    }
+  }
+  return out;
 }
 
 // ---------- ウェルネット: 種別ごとにCSV取得 ----------
@@ -282,6 +427,16 @@ function loadGeocodeCache() {
 function saveGeocodeCache() {
   fs.writeFileSync(GEOCODE_CACHE, JSON.stringify(geocodeCache));
 }
+// プロジェクト直下の .env（gitignore済み）があれば読み込む。環境変数が優先。
+(function loadDotEnv() {
+  const envPath = path.join(__dirname, "..", ".env");
+  if (!fs.existsSync(envPath)) return;
+  for (const line of fs.readFileSync(envPath, "utf8").split("\n")) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"#]*)"?\s*$/);
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim();
+  }
+})();
+
 const GOOGLE_KEY = process.env.GOOGLE_GEOCODING_KEY || "";
 const GOOGLE_API = "https://maps.googleapis.com/maps/api/geocode/json";
 const googleMemo = new Map(); // Google結果は規約(30日)順守のためディスクに永続化しない
@@ -301,7 +456,7 @@ async function geocodeGsi(addr) {
     const arr = JSON.parse(json);
     if (Array.isArray(arr) && arr.length && arr[0].geometry) {
       const [lng, lat] = arr[0].geometry.coordinates;
-      if (inNagoya(lat, lng)) result = { lat, lng, precise: false };
+      if (inArea(lat, lng)) result = { lat, lng, precise: false };
     }
   } catch (e) { /* null */ }
   geocodeCache[addr] = result;
@@ -323,7 +478,7 @@ async function geocodeGoogle(addr) {
     if (data.status === "OK" && data.results.length) {
       const g = data.results[0].geometry;
       const lat = g.location.lat, lng = g.location.lng;
-      if (inNagoya(lat, lng)) {
+      if (inArea(lat, lng)) {
         const precise =
           g.location_type === "ROOFTOP" || g.location_type === "RANGE_INTERPOLATED";
         result = { lat, lng, precise };
@@ -339,6 +494,29 @@ async function geocodeGoogle(addr) {
   return result;
 }
 
+// ---------- approx再ジオコーディング ----------
+// 位置不確実(approx)のうち番地のある住所をGoogleで引き直し、
+// 番地確定(ROOFTOP/RANGE_INTERPOLATED)が返ったものだけ座標を差し替えて解除する。
+// WAMの粗い代表点座標や町丁目止まりのジオコーディング結果の救済用。
+async function refineApproxWithGoogle(out) {
+  let fixed = 0, skipped = 0, tried = 0;
+  for (const x of out) {
+    if (!x.approx) continue;
+    const head = x.address.split(/[\s　]/)[0]; // 建物名を除く
+    if (!/[0-9０-９]/.test(head)) { skipped++; continue; } // 番地なしは救済不可
+    tried++;
+    if (tried % 100 === 0) console.log(`   ...${tried} 件処理`);
+    const g = await geocodeGoogle("愛知県" + head);
+    if (g && g.precise) {
+      x.lat = Math.round(g.lat * 1e6) / 1e6;
+      x.lng = Math.round(g.lng * 1e6) / 1e6;
+      x.approx = false;
+      fixed++;
+    }
+  }
+  return { fixed, skipped, tried };
+}
+
 // ---------- メイン ----------
 async function main() {
   loadGeocodeCache();
@@ -352,6 +530,7 @@ async function main() {
   console.log("② ウェルネットの一覧を取得中（種別ごと）...");
   const out = [];
   const seen = new Set();
+  const nagoyaBizNos = new Set(); // 隣接市町取り込み時の重複除外用
   const stats = {};
   let viaNo = 0, viaAddr = 0, geocoded = 0, dropped = 0;
   const kinds = Object.keys(KIND_CATEGORY);
@@ -426,9 +605,23 @@ async function main() {
         note: "",
       });
       stats[category] = (stats[category] || 0) + 1;
+      if (bizNo) nagoyaBizNos.add(bizNo);
     }
   }
   saveGeocodeCache();
+
+  console.log("③ 隣接市町の事業所をWAMから取り込み中...");
+  const adjacent = collectAdjacentFacilities(nagoyaBizNos);
+  const adjStats = {};
+  adjacent.forEach((x) => {
+    out.push(x);
+    stats[x.category] = (stats[x.category] || 0) + 1;
+    adjStats[x.ward] = (adjStats[x.ward] || 0) + 1;
+  });
+  console.log(
+    `   隣接市町 ${adjacent.length} 件: ` +
+      ADJACENT_CITIES.map((c) => `${c.ward} ${adjStats[c.ward] || 0}`).join(" / ")
+  );
 
   // 位置不確実の判定:
   // 同一座標に「異なる住所」が3件以上集まっている点は、番地を特定できず代表点
@@ -444,6 +637,12 @@ async function main() {
     const k = x.lat + "," + x.lng;
     if (addrByCoord[k].size >= 3) { x.approx = true; coarse++; }
   });
+
+  if (GOOGLE_KEY) {
+    console.log("④ 位置不確実(approx)をGoogleで再ジオコーディング中...");
+    const { fixed, skipped, tried } = await refineApproxWithGoogle(out);
+    console.log(`   番地確定で修正 ${fixed} / 試行 ${tried} / 番地なしスキップ ${skipped}`);
+  }
 
   out.sort(
     (a, b) =>

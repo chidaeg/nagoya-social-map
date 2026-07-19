@@ -14,6 +14,9 @@
   let popupState = null; // { members: [facility...], index: number } or null
   let mapReady = false;
   let markersBuilt = false;
+  // ?id= で指定された事業所。地図とデータの両方がそろってから吹き出しを開くため、
+  // applyUrlParams では保持だけして maybeBuildMarkers の最後で消化する
+  let pendingActiveId = null;
   let clustererSynced = false; // 初回クラスタ描画はコンストラクタ任せ→render()で1度だけスキップ
 
   // 状態
@@ -601,12 +604,16 @@
   // ----- URLパラメータによる初期絞り込み（ディープリンク）-----
   // 相談支援アプリ等から「この事業所／このサービスを地図で見る」リンクで開く用途。
   //   ?q=検索語 / ?ward=区・市町名 / ?cat=カテゴリ名（カンマ区切りで複数可）
+  //   ?id=事業所ID（wam_XXXXXXXXXX_カテゴリ）または WAM事業所番号（10桁数字）
+  //     → 該当事業所へパン＆ズームして吹き出しを開く（openPendingFacility）。
+  //       soudan-app は wam_number（10桁）しか持たないため番号だけでも指定可
   // cat がどのカテゴリ名にも一致しない場合は検索語として扱う（呼び出し側の表記ゆれ対策）
   function applyUrlParams() {
     const params = new URLSearchParams(location.search);
     const q = (params.get("q") || "").trim();
     const ward = (params.get("ward") || "").trim();
     const cat = (params.get("cat") || "").trim();
+    pendingActiveId = (params.get("id") || "").trim() || null;
 
     if (ward && [...els.wardSelect.options].some((o) => o.value === ward)) {
       state.ward = ward;
@@ -707,6 +714,24 @@
 
     markersBuilt = true;
     render(); // 一覧を反映（クラスタは上で生成済みなので初回は触らない）
+    openPendingFacility(); // ?id= 指定があればここで吹き出しを開く（地図・グループ構築後）
+  }
+
+  // ?id= で指定された事業所へパン＆ズームして吹き出しを開く。
+  // ID完全一致を優先し、数字だけの指定は WAM事業所番号として "wam_番号_" の
+  // 前方一致で探す（同番号で複数カテゴリがある場合は先頭の事業所を開く。
+  // 同一地点なら吹き出しのページャー ◀ ▶ で他の事業所も見られる）。
+  // 見つからない場合（データ更新で消えた等）は何もしない＝?q= 等の絞り込みだけが残る
+  function openPendingFacility() {
+    if (!pendingActiveId) return;
+    const id = pendingActiveId;
+    pendingActiveId = null;
+    const f =
+      state.facilities.find((x) => x.id === id) ||
+      (/^\d+$/.test(id)
+        ? state.facilities.find((x) => x.id.startsWith("wam_" + id + "_"))
+        : null);
+    if (f) setActive(f.id, true);
   }
 
   // ===== Googleログイン =====

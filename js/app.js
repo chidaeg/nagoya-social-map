@@ -598,6 +598,40 @@
     els.searchPanelToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
   }
 
+  // ----- URLパラメータによる初期絞り込み（ディープリンク）-----
+  // 相談支援アプリ等から「この事業所／このサービスを地図で見る」リンクで開く用途。
+  //   ?q=検索語 / ?ward=区・市町名 / ?cat=カテゴリ名（カンマ区切りで複数可）
+  // cat がどのカテゴリ名にも一致しない場合は検索語として扱う（呼び出し側の表記ゆれ対策）
+  function applyUrlParams() {
+    const params = new URLSearchParams(location.search);
+    const q = (params.get("q") || "").trim();
+    const ward = (params.get("ward") || "").trim();
+    const cat = (params.get("cat") || "").trim();
+
+    if (ward && [...els.wardSelect.options].some((o) => o.value === ward)) {
+      state.ward = ward;
+      els.wardSelect.value = ward;
+    }
+
+    let query = q;
+    if (cat) {
+      const wanted = cat.split(",").map((s) => s.trim()).filter(Boolean);
+      const known = wanted.filter((c) => state.activeCategories.has(c));
+      if (known.length) {
+        state.activeCategories = new Set(known);
+        els.catFilters.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+          cb.checked = known.includes(cb.value);
+        });
+      } else if (!query) {
+        query = wanted.join(" ");
+      }
+    }
+    if (query) {
+      state.query = query;
+      els.search.value = query;
+    }
+  }
+
   // クラスタの吹き出し（数字つき円）を描画する。
   // 件数が多いクラスタほど濃い青、少ないほど薄い青で表示する。
   // count を、画面内クラスタの最大件数 stats.clusters.markers.max に対する
@@ -794,6 +828,7 @@
     buildCategoryFilters();
     buildWardSelect();
     bindEvents();
+    applyUrlParams(); // カテゴリ・区の生成後、データ読み込み（初回render）前に適用する
     initAuth();
 
     fetch("data/facilities.json")
